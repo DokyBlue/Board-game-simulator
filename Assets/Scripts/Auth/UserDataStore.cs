@@ -5,6 +5,7 @@ using UnityEngine;
 
 namespace BoardGameSimulator.Auth
 {
+    // Deprecated: 本地账号存储已由后端 MySQL + Token 登录替代。
     public class UserDataStore : MonoBehaviour
     {
         private const string UserListKey = "BGS_USERS";

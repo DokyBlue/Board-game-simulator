@@ -9,9 +9,16 @@ namespace BoardGameSimulator.Lobby
     {
         [SerializeField] private TMP_Text welcomeText;
         [SerializeField] private string texasHoldemScene = "TexasHoldem";
+        [SerializeField] private string loginScene = "Login";
 
         private void Start()
         {
+            if (!SessionContext.IsLoggedIn)
+            {
+                SceneManager.LoadScene(loginScene);
+                return;
+            }
+
             welcomeText.text = $"欢迎，{SessionContext.CurrentUser}";
         }
 
