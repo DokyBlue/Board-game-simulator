@@ -1,8 +1,5 @@
 using BoardGameSimulator.Core;
-<<<<<<< ours
-=======
 using BoardGameSimulator.Networking;
->>>>>>> theirs
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -17,46 +14,19 @@ namespace BoardGameSimulator.Auth
         [SerializeField] private TMP_Text feedbackText;
 
         [Header("Dependency")]
-<<<<<<< ours
-        [SerializeField] private UserDataStore dataStore;
-=======
         [SerializeField] private AuthApiClient authApiClient;
->>>>>>> theirs
 
         [Header("Scene")]
         [SerializeField] private string gameSelectionScene = "GameSelection";
 
         public void Register()
         {
-<<<<<<< ours
-            if (dataStore.Register(usernameInput.text, passwordInput.text, out var message))
-            {
-                feedbackText.text = message;
-                feedbackText.color = Color.green;
-                return;
-            }
-
-            feedbackText.text = message;
-            feedbackText.color = Color.red;
-=======
             SetFeedback("请求中...", Color.yellow);
             StartCoroutine(authApiClient.Register(usernameInput.text.Trim(), passwordInput.text, HandleAuthResult));
->>>>>>> theirs
         }
 
         public void Login()
         {
-<<<<<<< ours
-            if (dataStore.Login(usernameInput.text, passwordInput.text, out var message))
-            {
-                SessionContext.CurrentUser = usernameInput.text.Trim();
-                SceneManager.LoadScene(gameSelectionScene);
-                return;
-            }
-
-            feedbackText.text = message;
-            feedbackText.color = Color.red;
-=======
             SetFeedback("请求中...", Color.yellow);
             StartCoroutine(authApiClient.Login(usernameInput.text.Trim(), passwordInput.text, HandleAuthResult));
         }
@@ -79,7 +49,6 @@ namespace BoardGameSimulator.Auth
         {
             feedbackText.text = message;
             feedbackText.color = color;
->>>>>>> theirs
         }
     }
 }
