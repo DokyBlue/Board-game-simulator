@@ -1,67 +1,91 @@
-# Unity 2D 桌游模拟器（Board Game Simulator）
+# Unity 2D 桌游模拟器（可直接运行原型）
 
-本项目提供一个可扩展的 Unity 2D 桌游客户端基础框架，已实现：
+本仓库已升级为**可直接运行的单人德州扑克原型**，包含：
 
-1. 注册/登录系统（用户名 + 密码）。
-2. 游戏选择大厅（支持后续扩展多个游戏入口）。
-3. 第一个游戏：德州扑克（Texas Hold'em）基础流程与牌型结算。
-4. 完整开发与使用说明文档（见 `Docs/`）。
+- 后端账号系统（Node.js + MySQL + JWT Token）
+- Unity 客户端注册/登录（调用后端接口）
+- 游戏大厅（可扩展多游戏入口）
+- 德州扑克完整下注街：Preflop / Flop / Turn / River
+- 玩家操作：Call / Raise / Fold
+- 1 名本地玩家 + 5 名 Bot（Bot 固定策略：自动跟注）
+- 基础 UI 美术资源（卡牌、筹码、行动按钮、桌布）
 
-## 目录结构
+---
 
-- `Assets/Scripts/Auth/`：登录注册相关逻辑。
-- `Assets/Scripts/Lobby/`：游戏大厅逻辑。
-- `Assets/Scripts/Poker/`：德州扑克核心逻辑（发牌、牌型判定、胜负结算）。
-- `Assets/Scripts/Core/`：跨场景会话上下文。
-- `Docs/`：详细设计文档与规则说明。
+## 1. 快速启动
 
-## Unity 场景建议
+### 1.1 启动后端（MySQL + Token）
 
-请在 Unity 中创建以下场景并加入 Build Settings：
+1. 创建数据库表：
+   - 执行 `Backend/sql/schema.sql`
+2. 配置环境变量：
+   - 复制 `Backend/.env.example` 为 `Backend/.env` 并填写 MySQL/JWT
+3. 启动服务：
 
-1. `Login`：登录注册场景。
-2. `GameSelection`：游戏选择大厅场景。
-3. `TexasHoldem`：德州扑克对局场景。
+```bash
+cd Backend
+npm install
+npm start
+```
 
-### Login 场景挂载
+默认监听 `http://127.0.0.1:8080`。
 
-- 新建空对象 `AuthRoot`，挂载：
-  - `UserDataStore`
-  - `AuthManager`
-- `AuthManager` 绑定：
-  - `usernameInput`（TMP_InputField）
-  - `passwordInput`（TMP_InputField）
-  - `feedbackText`（TMP_Text）
-  - `dataStore`（同对象上的 `UserDataStore`）
-  - `gameSelectionScene = GameSelection`
-- 两个按钮分别绑定：
-  - 注册按钮 -> `AuthManager.Register()`
-  - 登录按钮 -> `AuthManager.Login()`
+### 1.2 Unity 客户端场景
 
-### GameSelection 场景挂载
+请建立并加入 Build Settings：
 
-- 新建空对象 `LobbyRoot`，挂载 `GameSelectionController`。
-- 绑定 `welcomeText`（TMP_Text）。
-- “德州扑克”按钮绑定 `EnterTexasHoldem()`。
+1. `Login`
+2. `GameSelection`
+3. `TexasHoldem`
 
-### TexasHoldem 场景挂载
+---
 
-- 新建空对象 `TexasHoldemRoot`，挂载 `TexasHoldemGameManager`。
-- 绑定三个文本：
-  - `stateText`：显示胜利者/牌型/底池
-  - `boardText`：显示公共牌
-  - `playerText`：显示玩家手牌与筹码
-- 可新增“下一局”按钮绑定 `StartNewRound()`。
+## 2. 场景绑定说明
 
-## 当前实现范围
+### Login 场景
 
-- 已实现完整基础循环：建桌 -> 发底牌 -> 盲注 -> 公共牌 -> 牌型比较 -> 奖池分配。
-- 适合作为第一版可运行原型，便于后续扩展下注轮、AI 策略、网络联机等。
+在 `AuthRoot` 挂载：
 
-## 后续建议
+- `AuthManager`
+- `AuthApiClient`
 
-- 接入后端账号系统（数据库 + Token 登录）。
-- 完整下注回合（Preflop/Flop/Turn/River），支持 Call/Raise/Fold。
-- UI 牌面精灵化（卡牌图片、筹码动画、行动提示）。
-- 真多人联网（Netcode for GameObjects / Mirror / Photon）。
+`AuthManager` 绑定：
+
+- `usernameInput`（TMP_InputField）
+- `passwordInput`（TMP_InputField）
+- `feedbackText`（TMP_Text）
+- `authApiClient`
+- `gameSelectionScene = GameSelection`
+
+按钮事件：
+
+- 注册 -> `AuthManager.Register()`
+- 登录 -> `AuthManager.Login()`
+
+### GameSelection 场景
+
+在 `LobbyRoot` 挂载 `GameSelectionController`，绑定 `welcomeText`。
+
+### TexasHoldem 场景
+
+在 `TexasHoldemRoot` 挂载 `TexasHoldemGameManager`，绑定：
+
+- 文本：`stateText`、`boardText`、`playersText`
+- 按钮：`callButton`、`raiseButton`、`foldButton`
+- 视图：`ActionPromptView`、`ChipAnimator`
+- 牌面：2 个玩家手牌 `CardView` + 5 个公共牌 `CardView`
+- 牌库：`CardSpriteLibrary`（将 `Assets/Art/Cards/` 资源拖入）
+
+---
+
+## 3. 目录结构
+
+- `Assets/Scripts/Auth/`：登录控制
+- `Assets/Scripts/Networking/`：后端 API 调用
+- `Assets/Scripts/Lobby/`：大厅逻辑
+- `Assets/Scripts/Poker/`：德州扑克完整流程
+- `Assets/Scripts/UI/`：卡牌显示、筹码动画、行动提示
+- `Assets/Art/`：基础美术资源
+- `Backend/`：Node + MySQL + JWT 登录服务
+- `Docs/`：详细技术文档
 

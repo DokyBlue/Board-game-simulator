@@ -1,124 +1,75 @@
-# 开发说明文档
+# 开发实现文档（升级版）
 
-## 1. 总体架构
+## 1. 功能完成情况
 
-客户端采用分层模块：
+1. ✅ 接入后端账号系统（MySQL + JWT Token）。
+2. ✅ 德州扑克完整下注街（Preflop/Flop/Turn/River）。
+3. ✅ 玩家操作（Call / Raise / Fold）。
+4. ✅ 单人模式（1 玩家 + 5 Bot）。
+5. ✅ Bot 统一策略（自动跟注 + 摊牌比较）。
+6. ✅ UI 牌面精灵化（卡牌、筹码动画、行动提示）。
+7. ✅ 基础美术资源可直接使用。
 
-- **Auth 层**：账号注册与登录（当前使用 `PlayerPrefs` 本地持久化）。
-- **Lobby 层**：游戏列表展示与场景跳转。
-- **Game 层（Poker）**：德州扑克核心规则与结算引擎。
-- **Core 层**：全局会话（当前登录用户）传递。
+## 2. 后端设计
 
-## 2. 功能拆解
+- 技术栈：Node.js + Express + MySQL + JWT。
+- 关键接口：
+  - `POST /auth/register`
+  - `POST /auth/login`
+  - `GET /auth/me`
+  - `GET /health`
+- 密码：BCrypt 哈希保存（`password_hash`）。
+- Token：登录/注册后返回 JWT，客户端存于 `SessionContext.AccessToken`。
 
-### 2.1 注册/登录
+关键文件：
 
-- 输入：用户名、密码。
-- 注册：
-  - 校验非空。
-  - 校验用户名唯一。
-  - 成功后写入本地存储。
-- 登录：
-  - 校验用户存在。
-  - 校验密码匹配。
-  - 成功后保存当前用户到 `SessionContext`。
+- `Backend/src/index.js`
+- `Backend/sql/schema.sql`
+- `Backend/.env.example`
 
-核心脚本：
+## 3. Unity 客户端设计
 
-- `Assets/Scripts/Auth/UserDataStore.cs`
-- `Assets/Scripts/Auth/AuthManager.cs`
-- `Assets/Scripts/Core/SessionContext.cs`
+### 3.1 认证流程
 
-### 2.2 游戏选择大厅
+- `AuthApiClient`：使用 `UnityWebRequest` 调后端接口。
+- `AuthManager`：触发注册/登录并处理返回结果。
+- 登录成功后写入 `SessionContext`：`UserId / CurrentUser / AccessToken`。
 
-- 进入大厅时显示“欢迎，用户名”。
-- 当前仅提供“德州扑克”入口。
-- 后续可扩展更多按钮（例如：斗地主、UNO、五子棋等）。
+### 3.2 德州扑克流程
 
-核心脚本：
+`TexasHoldemGameManager` 中实现：
 
-- `Assets/Scripts/Lobby/GameSelectionController.cs`
+- 建桌：1 名本地玩家 + 5 名 Bot
+- 发牌与盲注
+- 四个下注街：
+  - Preflop
+  - Flop
+  - Turn
+  - River
+- 玩家决策：
+  - Call：补齐到当前最大下注
+  - Raise：先跟注再追加固定加注额
+  - Fold：本局弃牌
+- Bot 决策：
+  - 始终自动 Call
+- Showdown：调用 `PokerHandEvaluator` 比较牌型分配底池
 
-### 2.3 德州扑克
+### 3.3 UI 与美术
 
-当前版本覆盖：
+- `CardSpriteLibrary`：按 `rank_suit` 命名查找牌面精灵。
+- `CardView`：控制单张牌的正反面显示。
+- `ChipAnimator`：底池数字过渡动画。
+- `ActionPromptView`：操作提示与行为反馈。
 
-1. 创建牌桌（1 人 + 3 Bot）。
-2. 初始化筹码与盲注。
-3. 发放每位玩家两张底牌。
-4. 发五张公共牌。
-5. 进行 7 选 5 的最大牌型比较。
-6. 分配奖池，展示赢家信息。
+资源目录：
 
-核心脚本：
+- `Assets/Art/Cards/`
+- `Assets/Art/UI/`
 
-- `Assets/Scripts/Poker/PokerCard.cs`
-- `Assets/Scripts/Poker/PokerDeck.cs`
-- `Assets/Scripts/Poker/PokerPlayer.cs`
-- `Assets/Scripts/Poker/PokerHandEvaluator.cs`
-- `Assets/Scripts/Poker/TexasHoldemGameManager.cs`
+## 4. 扩展建议
 
-## 3. 牌型比较说明
-
-已支持牌型（由高到低）：
-
-1. Royal Flush（皇家同花顺）
-2. Straight Flush（同花顺）
-3. Four of a Kind（四条）
-4. Full House（葫芦）
-5. Flush（同花）
-6. Straight（顺子）
-7. Three of a Kind（三条）
-8. Two Pairs（两对）
-9. One Pair（一对）
-10. High Card（高牌）
-
-比较策略：
-
-- 先比较 `HandRank`。
-- 若牌型相同，按踢脚（Kicker）列表逐位比较。
-
-## 4. 扩展路线
-
-### 4.1 多游戏扩展
-
-在 `GameSelection` 场景中新增按钮与场景映射即可。
-
-推荐新增接口：
-
-```csharp
-public interface IGameEntry
-{
-    string GameId { get; }
-    string DisplayName { get; }
-    void Enter();
-}
-```
-
-### 4.2 登录系统升级
-
-建议将 `UserDataStore` 替换为 HTTP API：
-
-- `POST /register`
-- `POST /login`
-- 返回 JWT/SessionToken
-
-并将密码传输改为 HTTPS + 服务端哈希存储（BCrypt/Argon2）。
-
-### 4.3 德州扑克玩法完善
-
-建议追加：
-
-- 完整动作系统（Check/Call/Raise/Fold/All-in）。
-- 多轮下注状态机。
-- 位置逻辑（庄家位、SB、BB 轮转）。
-- 边池（Side Pot）处理。
-- 回合计时器与超时托管。
-
-## 5. 交付清单
-
-- ✅ 账号注册登录功能
-- ✅ 游戏选择界面
-- ✅ 德州扑克第一版实现
-- ✅ 详细说明文档
+- 完善边池（Side Pot）和多人平分池。
+- Bot 策略从固定跟注升级为基于底池赔率的决策。
+- 为筹码移动增加轨迹动画、音效。
+- 接入排行榜与玩家历史对局记录。
 
