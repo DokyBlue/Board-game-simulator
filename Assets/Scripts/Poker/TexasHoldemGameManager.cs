@@ -35,6 +35,9 @@ namespace BoardGameSimulator.Poker
         [SerializeField] private TMP_Text playersText;
         [SerializeField] private TMP_Text roomText;
 
+        [Header("Seat UI")]
+        [SerializeField] private List<PlayerSeatView> playerSeatViews;
+
         [Header("Action UI")]
         [SerializeField] private Button callButton;
         [SerializeField] private Button raiseButton;
@@ -197,6 +200,7 @@ namespace BoardGameSimulator.Poker
 
         private void PrepareRound()
         {
+            ClearAllSeatHighlights();
             _pot = 0;
             _communityCards.Clear();
             _deck = new PokerDeck();
@@ -276,6 +280,14 @@ namespace BoardGameSimulator.Poker
             while (pending.Count > 0 && ActivePlayers().Count > 1)
             {
                 var player = _players[index];
+
+                // 清除旧高亮并设置当前行动玩家的高亮
+                ClearAllSeatHighlights();
+                if (index < playerSeatViews.Count)
+                {
+                    playerSeatViews[index].SetHighlight(true);
+                }
+
                 index = NextSeat(index);
 
                 if (player.IsFolded || player.IsAllIn || player.Chips <= 0)
@@ -305,7 +317,9 @@ namespace BoardGameSimulator.Poker
                 SetActionButtons(false);
                 HandleHumanAction(player, _playerAction, callTarget, ref maxBet, ref pending);
                 RenderStaticUI(street);
+                index = NextSeat(index);
             }
+            ClearAllSeatHighlights(); 
         }
 
         private BotDecision BuildBotDecision(PokerPlayer player, BettingStreet street, int callTarget)
@@ -542,7 +556,7 @@ namespace BoardGameSimulator.Poker
                 return style;
             }
 
-            var fallback = Math.Abs(playerName.GetHashCode()) % 4 switch
+            var fallback = (Math.Abs(playerName.GetHashCode()) % 4) switch
             {
                 0 => BotStyle.Tight,
                 1 => BotStyle.Balanced,
@@ -569,6 +583,11 @@ namespace BoardGameSimulator.Poker
                 HandRank.RoyalFlush => 10,
                 _ => 0
             };
+        }
+
+        private void ShowRemainingChips()
+        {
+            
         }
 
         private void ResolveShowdown()
@@ -687,9 +706,25 @@ namespace BoardGameSimulator.Poker
 
         private void RenderStaticUI(BettingStreet street)
         {
+            // 更新公共牌信息
             boardText.text = $"{street} | 公共牌：" + string.Join(" | ", _communityCards.Select(c => c.ToString()));
-            playersText.text = string.Join("\n", _players.Select(p =>
-                $"{p.Name} {(p.IsFolded ? "[Fold]" : "")} {(p.IsAllIn ? "[AllIn]" : "")} Bet:{p.CurrentBet} 筹码:{p.Chips} 动作:{(_lastActions.ContainsKey(p.Name) ? _lastActions[p.Name] : "-")}"));
+
+            if (playersText != null)
+            {
+                playersText.text = string.Join("\n", _players.Select(p =>
+                    $"{p.Name} {(p.IsFolded ? "[Fold]" : "")} {(p.IsAllIn ? "[AllIn]" : "")} Bet:{p.CurrentBet} 筹码:{p.Chips} 动作:{(_lastActions.ContainsKey(p.Name) ? _lastActions[p.Name] : "-")}"));
+            }
+
+            // 将数据分发给每个独立的座位 UI
+            for (int i = 0; i < _players.Count; i++)
+            {
+                // 确保场景中绑定的座位 UI 数量足够
+                if (playerSeatViews != null && i < playerSeatViews.Count)
+                {
+                    string action = _lastActions.ContainsKey(_players[i].Name) ? _lastActions[_players[i].Name] : "-";
+                    playerSeatViews[i].UpdateSeat(_players[i], action);
+                }
+            }
         }
 
         private void RenderCards()
@@ -719,7 +754,7 @@ namespace BoardGameSimulator.Poker
             {
                 var botName = $"Bot-{i}";
                 _players.Add(new PokerPlayer(botName, initialChips, true));
-                _botStyles[botName] = Math.Abs(botName.GetHashCode()) % 4 switch
+                _botStyles[botName] = (Math.Abs(botName.GetHashCode()) % 4) switch
                 {
                     0 => BotStyle.Tight,
                     1 => BotStyle.Balanced,
@@ -777,21 +812,22 @@ namespace BoardGameSimulator.Poker
                 .Select(p =>
                 {
                     var action = _lastActions.TryGetValue(p.Name, out var lastAction) ? lastAction : "Waiting";
-                    return $"{p.Name} | {BotStyleDescription(GetBotStyle(p.Name))} | 最近动作: {action}";
+                    //return $"{p.Name} | {BotStyleDescription(GetBotStyle(p.Name))} | 最近动作: {action}";
+                    return $"{p.Name} | 最近动作: {action}";
                 });
             promptView.SetStrategySnapshot(string.Join("\n", lines));
         }
 
-        private static string BotStyleDescription(BotStyle style)
-        {
-            return style switch
-            {
-                BotStyle.Tight => "Tight：保守，仅强牌重注",
-                BotStyle.Balanced => "Balanced：中庸，按压力调整",
-                BotStyle.Aggressive => "Aggressive：激进，偏好加注",
-                _ => "Chaotic：随机，波动较大"
-            };
-        }
+        //private static string BotStyleDescription(BotStyle style)
+        //{
+        //    return style switch
+        //    {
+        //        BotStyle.Tight => "Tight：保守，仅强牌重注",
+        //        BotStyle.Balanced => "Balanced：中庸，按压力调整",
+        //        BotStyle.Aggressive => "Aggressive：激进，偏好加注",
+        //        _ => "Chaotic：随机，波动较大"
+        //    };
+        //}
 
         private void EnterRoundChoiceState()
         {
@@ -850,6 +886,14 @@ namespace BoardGameSimulator.Poker
             QueryHistory();
             StopAllCoroutines();
             StartCoroutine(RoundLoop());
+        }
+        private void ClearAllSeatHighlights()
+        {
+            if (playerSeatViews == null) return;
+            foreach (var seat in playerSeatViews)
+            {
+                if (seat != null) seat.SetHighlight(false);
+            }
         }
 
         public void LeaveRoomAndBackLobby()
