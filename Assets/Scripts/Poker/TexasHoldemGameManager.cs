@@ -40,6 +40,7 @@ namespace BoardGameSimulator.Poker
 
         [Header("Action UI")]
         [SerializeField] private Button callButton;
+        [SerializeField] private Button checkButton;
         [SerializeField] private Button raiseButton;
         [SerializeField] private Button allInButton;
         [SerializeField] private Button foldButton;
@@ -80,6 +81,7 @@ namespace BoardGameSimulator.Poker
         private enum PlayerActionType
         {
             None,
+            Check,
             Call,
             Raise,
             AllIn,
@@ -120,6 +122,10 @@ namespace BoardGameSimulator.Poker
         private void HookButtons()
         {
             callButton.onClick.AddListener(() => _playerAction = PlayerActionType.Call);
+            if (checkButton != null)
+            {
+                checkButton.onClick.AddListener(() => _playerAction = PlayerActionType.Check);
+            }
             raiseButton.onClick.AddListener(() => _playerAction = PlayerActionType.Raise);
             if (allInButton != null)
             {
@@ -285,6 +291,9 @@ namespace BoardGameSimulator.Poker
             var maxBet = _players.Max(p => p.CurrentBet);
             var pending = ActivePlayers().Where(p => !p.IsAllIn).Select(p => p.Name).ToHashSet();
             var index = startIndex;
+            var canKeepChecking = true;
+            var checkCount = 0;
+            var checkablePlayerCount = ActivePlayers().Count(p => !p.IsAllIn && p.Chips > 0);
 
             while (pending.Count > 0 && ActivePlayers().Count > 1)
             {
@@ -309,26 +318,28 @@ namespace BoardGameSimulator.Poker
                 {
                     yield return new WaitForSeconds(botActionDelay);
                     var decision = BuildBotDecision(player, street, callTarget);
-                    HandleBotDecision(player, decision, ref maxBet, ref pending);
+                    HandleBotDecision(player, decision, callTarget, ref maxBet, ref pending, ref canKeepChecking, ref checkCount, checkablePlayerCount);
                     RenderStaticUI(street);
                     continue;
                 }
 
                 _playerAction = PlayerActionType.None;
-                SetActionButtons(true);
                 var toCall = Mathf.Max(0, callTarget - player.CurrentBet);
-                promptView.Show($"{street} 轮到你：To Call {toCall}", Color.green);
+                var canCheck = toCall == 0 && canKeepChecking;
+                SetActionButtons(true, canCheck);
+                promptView.Show(canCheck
+                    ? $"{street} 轮到你：可 Check"
+                    : $"{street} 轮到你：To Call {toCall}", Color.green);
                 while (_playerAction == PlayerActionType.None)
                 {
                     yield return null;
                 }
 
                 SetActionButtons(false);
-                HandleHumanAction(player, _playerAction, callTarget, ref maxBet, ref pending);
+                HandleHumanAction(player, _playerAction, callTarget, ref maxBet, ref pending, ref canKeepChecking, ref checkCount, checkablePlayerCount);
                 RenderStaticUI(street);
-                index = NextSeat(index);
             }
-            ClearAllSeatHighlights(); 
+            ClearAllSeatHighlights();
         }
 
         private BotDecision BuildBotDecision(PokerPlayer player, BettingStreet street, int callTarget)
@@ -432,12 +443,25 @@ namespace BoardGameSimulator.Poker
             }
         }
 
-        private void HandleBotDecision(PokerPlayer player, BotDecision decision, ref int maxBet, ref HashSet<string> pending)
+        private void HandleBotDecision(
+            PokerPlayer player,
+            BotDecision decision,
+            int callTarget,
+            ref int maxBet,
+            ref HashSet<string> pending,
+            ref bool canKeepChecking,
+            ref int checkCount,
+            int checkablePlayerCount)
         {
-            var callTarget = maxBet;
+            if (callTarget == player.CurrentBet && canKeepChecking && decision.Action == PlayerActionType.Call)
+            {
+                decision.Action = PlayerActionType.Check;
+            }
+
             switch (decision.Action)
             {
                 case PlayerActionType.Fold:
+                    canKeepChecking = false;
                     player.IsFolded = true;
                     pending.Remove(player.Name);
                     RecordAction(player.Name, "Fold");
@@ -445,6 +469,7 @@ namespace BoardGameSimulator.Poker
                     return;
                 case PlayerActionType.AllIn:
                 {
+                    canKeepChecking = false;
                     var paidToCall = player.BetTo(callTarget);
                     var extra = player.AllIn();
                     AddToPot(paidToCall + extra);
@@ -464,6 +489,7 @@ namespace BoardGameSimulator.Poker
                 }
                 case PlayerActionType.Raise:
                 {
+                    canKeepChecking = false;
                     var paidToCall = player.BetTo(callTarget);
                     var raiseAmount = Mathf.Max(defaultRaiseStep, decision.RaiseAmount);
                     var paidRaise = player.RaiseBy(raiseAmount);
@@ -480,8 +506,27 @@ namespace BoardGameSimulator.Poker
                     promptView.Show($"{player.Name} Raise +{paidRaise}", Color.magenta);
                     return;
                 }
+                case PlayerActionType.Check:
+                {
+                    if (callTarget != player.CurrentBet || !canKeepChecking)
+                    {
+                        goto default;
+                    }
+
+                    checkCount += 1;
+                    RecordAction(player.Name, "Check");
+                    promptView.Show($"{player.Name} Check", Color.yellow);
+                    pending.Remove(player.Name);
+                    if (checkCount >= checkablePlayerCount)
+                    {
+                        promptView.Show("所有玩家均 Check，进入下一阶段", Color.cyan);
+                    }
+
+                    return;
+                }
                 default:
                 {
+                    canKeepChecking = false;
                     var paid = player.BetTo(callTarget);
                     AddToPot(paid);
                     RecordAction(player.Name, "Call");
@@ -492,10 +537,40 @@ namespace BoardGameSimulator.Poker
             }
         }
 
-        private void HandleHumanAction(PokerPlayer player, PlayerActionType action, int callTarget, ref int maxBet, ref HashSet<string> pending)
+        private void HandleHumanAction(
+            PokerPlayer player,
+            PlayerActionType action,
+            int callTarget,
+            ref int maxBet,
+            ref HashSet<string> pending,
+            ref bool canKeepChecking,
+            ref int checkCount,
+            int checkablePlayerCount)
         {
+            if (action == PlayerActionType.Check)
+            {
+                if (callTarget != player.CurrentBet || !canKeepChecking)
+                {
+                    action = PlayerActionType.Call;
+                }
+                else
+                {
+                    checkCount += 1;
+                    RecordAction(player.Name, "Check");
+                    promptView.Show($"{player.Name} Check", Color.yellow);
+                    pending.Remove(player.Name);
+                    if (checkCount >= checkablePlayerCount)
+                    {
+                        promptView.Show("所有玩家均 Check，进入下一阶段", Color.cyan);
+                    }
+
+                    return;
+                }
+            }
+
             if (action == PlayerActionType.Fold)
             {
+                canKeepChecking = false;
                 player.IsFolded = true;
                 RecordAction(player.Name, "Fold");
                 promptView.Show($"{player.Name} Fold", Color.red);
@@ -505,6 +580,7 @@ namespace BoardGameSimulator.Poker
 
             if (action == PlayerActionType.AllIn)
             {
+                canKeepChecking = false;
                 var paidToCall = player.BetTo(callTarget);
                 var extra = player.AllIn();
                 AddToPot(paidToCall + extra);
@@ -525,6 +601,7 @@ namespace BoardGameSimulator.Poker
 
             if (action == PlayerActionType.Raise)
             {
+                canKeepChecking = false;
                 var paidToCall = player.BetTo(callTarget);
                 var raiseAmount = ParseRaiseAmount();
                 var paidRaise = player.RaiseBy(raiseAmount);
@@ -536,6 +613,7 @@ namespace BoardGameSimulator.Poker
                 return;
             }
 
+            canKeepChecking = false;
             var paidCall = player.BetTo(callTarget);
             AddToPot(paidCall);
             RecordAction(player.Name, "Call");
@@ -697,9 +775,13 @@ namespace BoardGameSimulator.Poker
             return _players.Where(p => p.Chips > 0).ToList();
         }
 
-        private void SetActionButtons(bool enabled)
+        private void SetActionButtons(bool enabled, bool canCheck = false)
         {
             callButton.interactable = enabled;
+            if (checkButton != null)
+            {
+                checkButton.interactable = enabled && canCheck;
+            }
             raiseButton.interactable = enabled;
             foldButton.interactable = enabled;
             if (allInButton != null)
@@ -835,6 +917,12 @@ namespace BoardGameSimulator.Poker
                     var isSelf = member.userId == SessionContext.UserId;
                     _players.Add(new PokerPlayer(member.username, initialChips, !isSelf));
                 }
+            }
+
+            for (var i = _players.Count; i < MaxRoomPlayers; i++)
+            {
+                var botName = $"Bot-{i + 1}";
+                _players.Add(new PokerPlayer(botName, initialChips, true));
             }
 
             for (var i = 0; i < _players.Count; i++)
