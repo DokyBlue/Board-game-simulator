@@ -9,6 +9,7 @@ namespace BoardGameSimulator.Core
         public static string CurrentRoomCode { get; set; }
         public static string CurrentRoomGameKey { get; set; }
         public static bool IsRoomOwner { get; set; }
+        public static bool AutoStartOnSceneEnter { get; set; }
 
         public static bool IsLoggedIn => !string.IsNullOrWhiteSpace(AccessToken);
 
@@ -26,6 +27,7 @@ namespace BoardGameSimulator.Core
             CurrentRoomCode = roomCode ?? string.Empty;
             CurrentRoomGameKey = gameKey ?? string.Empty;
             IsRoomOwner = isOwner;
+            AutoStartOnSceneEnter = false;
         }
 
         public static void ClearRoom()
@@ -34,6 +36,7 @@ namespace BoardGameSimulator.Core
             CurrentRoomCode = string.Empty;
             CurrentRoomGameKey = string.Empty;
             IsRoomOwner = false;
+            AutoStartOnSceneEnter = false;
         }
     }
 }

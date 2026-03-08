@@ -218,6 +218,12 @@ app.post('/lobby/rooms/join', authRequired, async (req, res) => {
     const room = rooms[0];
     const [members] = await pool.query('SELECT id FROM room_members WHERE room_id = ? AND user_id = ? LIMIT 1', [room.id, userId]);
     if (members.length === 0) {
+      const [memberCountRows] = await pool.query('SELECT COUNT(1) AS count FROM room_members WHERE room_id = ?', [room.id]);
+      const memberCount = Number(memberCountRows[0]?.count || 0);
+      if (memberCount >= 6) {
+        return res.status(409).json({ message: '房间人数已满（最多6人）' });
+      }
+
       await pool.query('INSERT INTO room_members(room_id, user_id, is_owner) VALUES(?, ?, 0)', [room.id, userId]);
     }
 
@@ -232,6 +238,42 @@ app.post('/lobby/rooms/join', authRequired, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: '加入房间失败', detail: error.message });
+  }
+});
+
+app.get('/lobby/rooms/:roomId/members', authRequired, async (req, res) => {
+  const roomId = Number(req.params.roomId || 0);
+  const userId = Number(req.user.uid || 0);
+
+  if (!roomId) {
+    return res.status(400).json({ message: 'roomId不能为空' });
+  }
+
+  try {
+    const [membershipRows] = await pool.query(
+      'SELECT id FROM room_members WHERE room_id = ? AND user_id = ? LIMIT 1',
+      [roomId, userId]
+    );
+
+    if (membershipRows.length === 0) {
+      return res.status(403).json({ message: '仅房间成员可查看成员列表' });
+    }
+
+    const [members] = await pool.query(
+      `SELECT rm.user_id AS userId, u.username, rm.is_owner AS isOwner
+       FROM room_members rm
+       INNER JOIN users u ON u.id = rm.user_id
+       WHERE rm.room_id = ?
+       ORDER BY rm.joined_at ASC`,
+      [roomId]
+    );
+
+    return res.json({
+      roomId,
+      members
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '获取房间成员失败', detail: error.message });
   }
 });
 
