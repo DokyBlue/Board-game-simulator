@@ -41,6 +41,35 @@ function sanitizeUser(user) {
   return { id: user.id, username: user.username };
 }
 
+function getBearerToken(req) {
+  const auth = req.headers.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.substring(7) : '';
+}
+
+function authRequired(req, res, next) {
+  try {
+    const token = getBearerToken(req);
+    if (!token) {
+      return res.status(401).json({ message: '缺少Token' });
+    }
+
+    req.user = jwt.verify(token, JWT_SECRET);
+    return next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Token无效', detail: error.message });
+  }
+}
+
+function buildRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i += 1) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+
+  return code;
+}
+
 app.get('/health', async (_, res) => {
   try {
     await pool.query('SELECT 1');
@@ -111,8 +140,7 @@ app.post('/auth/login', async (req, res) => {
 
 app.get('/auth/me', async (req, res) => {
   try {
-    const auth = req.headers.authorization || '';
-    const token = auth.startsWith('Bearer ') ? auth.substring(7) : '';
+    const token = getBearerToken(req);
     if (!token) {
       return res.status(401).json({ message: '缺少Token' });
     }
@@ -126,6 +154,83 @@ app.get('/auth/me', async (req, res) => {
     return res.json({ user: rows[0] });
   } catch (error) {
     return res.status(401).json({ message: 'Token无效', detail: error.message });
+  }
+});
+
+app.post('/lobby/rooms', authRequired, async (req, res) => {
+  const gameKey = (req.body.gameKey || '').trim();
+  if (!gameKey) {
+    return res.status(400).json({ message: 'gameKey不能为空' });
+  }
+
+  const ownerId = req.user.uid;
+  const ownerName = req.user.username;
+
+  try {
+    let code = '';
+    for (let i = 0; i < 8; i += 1) {
+      code = buildRoomCode();
+      const [exists] = await pool.query('SELECT id FROM game_rooms WHERE code = ? LIMIT 1', [code]);
+      if (exists.length === 0) {
+        break;
+      }
+    }
+
+    const [created] = await pool.query(
+      'INSERT INTO game_rooms(code, game_key, owner_user_id) VALUES(?, ?, ?)',
+      [code, gameKey, ownerId]
+    );
+
+    await pool.query(
+      'INSERT INTO room_members(room_id, user_id, is_owner) VALUES(?, ?, 1)',
+      [created.insertId, ownerId]
+    );
+
+    return res.status(201).json({
+      room: {
+        id: created.insertId,
+        code,
+        gameKey,
+        owner: ownerName
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '创建房间失败', detail: error.message });
+  }
+});
+
+app.post('/lobby/rooms/join', authRequired, async (req, res) => {
+  const code = (req.body.code || '').trim().toUpperCase();
+  const userId = req.user.uid;
+  const username = req.user.username;
+
+  if (!code) {
+    return res.status(400).json({ message: '房间号不能为空' });
+  }
+
+  try {
+    const [rooms] = await pool.query('SELECT id, code, game_key, owner_user_id FROM game_rooms WHERE code = ? LIMIT 1', [code]);
+    if (rooms.length === 0) {
+      return res.status(404).json({ message: '房间不存在' });
+    }
+
+    const room = rooms[0];
+    const [members] = await pool.query('SELECT id FROM room_members WHERE room_id = ? AND user_id = ? LIMIT 1', [room.id, userId]);
+    if (members.length === 0) {
+      await pool.query('INSERT INTO room_members(room_id, user_id, is_owner) VALUES(?, ?, 0)', [room.id, userId]);
+    }
+
+    return res.json({
+      room: {
+        id: room.id,
+        code: room.code,
+        gameKey: room.game_key,
+        ownerUserId: room.owner_user_id,
+        joinedUser: username
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '加入房间失败', detail: error.message });
   }
 });
 

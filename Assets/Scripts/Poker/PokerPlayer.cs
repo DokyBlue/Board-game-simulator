@@ -43,6 +43,20 @@ namespace BoardGameSimulator.Poker
             return paid;
         }
 
+        public int AllIn()
+        {
+            if (Chips <= 0)
+            {
+                return 0;
+            }
+
+            var paid = Chips;
+            Chips = 0;
+            CurrentBet += paid;
+            IsAllIn = true;
+            return paid;
+        }
+
         public void ResetForRound()
         {
             IsFolded = false;
