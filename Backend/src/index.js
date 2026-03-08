@@ -191,7 +191,8 @@ app.post('/lobby/rooms', authRequired, async (req, res) => {
         id: created.insertId,
         code,
         gameKey,
-        owner: ownerName
+        owner: ownerName,
+        ownerUserId: ownerId
       }
     });
   } catch (error) {
@@ -231,6 +232,40 @@ app.post('/lobby/rooms/join', authRequired, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: '加入房间失败', detail: error.message });
+  }
+});
+
+
+app.post('/lobby/rooms/leave', authRequired, async (req, res) => {
+  const roomId = Number(req.body.roomId || 0);
+  const userId = req.user.uid;
+
+  if (!roomId) {
+    return res.status(400).json({ message: 'roomId不能为空' });
+  }
+
+  try {
+    const [rooms] = await pool.query('SELECT id, owner_user_id FROM game_rooms WHERE id = ? LIMIT 1', [roomId]);
+    if (rooms.length === 0) {
+      return res.status(404).json({ message: '房间不存在' });
+    }
+
+    const room = rooms[0];
+    if (Number(room.owner_user_id) === Number(userId)) {
+      await pool.query('DELETE FROM game_rooms WHERE id = ?', [roomId]);
+      return res.json({ message: '房主已离开，房间已销毁' });
+    }
+
+    await pool.query('DELETE FROM room_members WHERE room_id = ? AND user_id = ?', [roomId, userId]);
+    const [members] = await pool.query('SELECT id FROM room_members WHERE room_id = ? LIMIT 1', [roomId]);
+    if (members.length === 0) {
+      await pool.query('DELETE FROM game_rooms WHERE id = ?', [roomId]);
+      return res.json({ message: '房间无人，已自动销毁' });
+    }
+
+    return res.json({ message: '已退出房间' });
+  } catch (error) {
+    return res.status(500).json({ message: '退出房间失败', detail: error.message });
   }
 });
 

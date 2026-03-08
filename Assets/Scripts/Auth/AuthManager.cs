@@ -42,6 +42,7 @@ namespace BoardGameSimulator.Auth
             SessionContext.UserId = result.Response.user.id;
             SessionContext.CurrentUser = result.Response.user.username;
             SessionContext.AccessToken = result.Response.token;
+            SessionContext.ClearRoom();
             SceneManager.LoadScene(gameSelectionScene);
         }
 

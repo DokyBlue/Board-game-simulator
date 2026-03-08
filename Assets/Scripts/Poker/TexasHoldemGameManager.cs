@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using BoardGameSimulator.Core;
+using BoardGameSimulator.Networking;
 using BoardGameSimulator.UI;
 using TMPro;
 using UnityEngine;
@@ -32,15 +33,23 @@ namespace BoardGameSimulator.Poker
         [SerializeField] private TMP_Text stateText;
         [SerializeField] private TMP_Text boardText;
         [SerializeField] private TMP_Text playersText;
+        [SerializeField] private TMP_Text roomText;
 
         [Header("Action UI")]
         [SerializeField] private Button callButton;
         [SerializeField] private Button raiseButton;
         [SerializeField] private Button allInButton;
         [SerializeField] private Button foldButton;
+        [SerializeField] private Button nextRoundButton;
+        [SerializeField] private Button resetChipsButton;
+        [SerializeField] private Button leaveRoomButton;
         [SerializeField] private TMP_InputField raiseAmountInput;
         [SerializeField] private ActionPromptView promptView;
         [SerializeField] private ChipAnimator chipAnimator;
+        [SerializeField] private LobbyApiClient lobbyApiClient;
+
+        [Header("Scene")]
+        [SerializeField] private string gameSelectionScene = "GameSelection";
 
         [Header("Card UI")]
         [SerializeField] private List<CardView> playerCardViews;
@@ -52,7 +61,9 @@ namespace BoardGameSimulator.Poker
         private PokerDeck _deck;
         private int _pot;
         private int _dealerIndex;
+        private bool _waitingForRoundChoice;
         private PlayerActionType _playerAction = PlayerActionType.None;
+        private readonly Dictionary<string, string> _lastActions = new Dictionary<string, string>();
 
         private enum PlayerActionType
         {
@@ -81,6 +92,7 @@ namespace BoardGameSimulator.Poker
         {
             CreateTable();
             HookButtons();
+            RenderRoomInfo();
             StartCoroutine(RoundLoop());
         }
 
@@ -93,18 +105,47 @@ namespace BoardGameSimulator.Poker
                 allInButton.onClick.AddListener(() => _playerAction = PlayerActionType.AllIn);
             }
             foldButton.onClick.AddListener(() => _playerAction = PlayerActionType.Fold);
+            if (nextRoundButton != null)
+            {
+                nextRoundButton.onClick.AddListener(StartNextRound);
+                nextRoundButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
+                nextRoundButton.interactable = false;
+            }
+
+            if (resetChipsButton != null)
+            {
+                resetChipsButton.onClick.AddListener(ResetChipsAndRestart);
+                resetChipsButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
+                resetChipsButton.interactable = false;
+            }
+
+            if (leaveRoomButton != null)
+            {
+                leaveRoomButton.onClick.AddListener(LeaveRoomAndBackLobby);
+            }
+
             SetActionButtons(false);
         }
 
         public void StartNewRoundManual()
         {
-            StopAllCoroutines();
-            StartCoroutine(RoundLoop());
+            StartNextRound();
         }
 
         private IEnumerator RoundLoop()
         {
+            _waitingForRoundChoice = false;
+            ToggleRoundChoiceButtons(false);
             PrepareRound();
+
+            if (PlayersWithChips().Count <= 1)
+            {
+                ResolveShowdown();
+                RenderStaticUI(BettingStreet.Showdown);
+                EnterRoundChoiceState();
+                yield break;
+            }
+
             yield return Preflop();
             if (ActivePlayers().Count > 1)
             {
@@ -123,6 +164,7 @@ namespace BoardGameSimulator.Poker
 
             ResolveShowdown();
             RenderStaticUI(BettingStreet.Showdown);
+            EnterRoundChoiceState();
         }
 
         private void PrepareRound()
@@ -131,16 +173,30 @@ namespace BoardGameSimulator.Poker
             _communityCards.Clear();
             _deck = new PokerDeck();
             _deck.Shuffle();
+            _lastActions.Clear();
 
             foreach (var player in _players)
             {
                 player.ResetForRound();
+                if (player.Chips <= 0)
+                {
+                    player.IsFolded = true;
+                    _lastActions[player.Name] = "Out";
+                    continue;
+                }
+
                 player.HoleCards.Add(_deck.Draw());
                 player.HoleCards.Add(_deck.Draw());
+                _lastActions[player.Name] = "Waiting";
             }
 
-            CollectBlind(NextSeat(_dealerIndex), smallBlind);
-            CollectBlind(NextSeat(_dealerIndex, 2), bigBlind);
+            var blindSeats = PlayersWithChips().Select(p => _players.IndexOf(p)).ToList();
+            if (blindSeats.Count >= 2)
+            {
+                CollectBlind(NextSeatWithChips(_dealerIndex), smallBlind);
+                CollectBlind(NextSeatWithChips(_dealerIndex, 2), bigBlind);
+            }
+
             RenderCards();
             RenderStaticUI(BettingStreet.Preflop);
         }
@@ -148,7 +204,7 @@ namespace BoardGameSimulator.Poker
         private IEnumerator Preflop()
         {
             promptView.Show("Preflop 开始", Color.white);
-            yield return BettingRound(BettingStreet.Preflop, NextSeat(_dealerIndex, 3));
+            yield return BettingRound(BettingStreet.Preflop, NextSeatWithChips(_dealerIndex, 3));
         }
 
         private IEnumerator Flop()
@@ -158,7 +214,7 @@ namespace BoardGameSimulator.Poker
             RenderCards();
             RenderStaticUI(BettingStreet.Flop);
             promptView.Show("Flop", Color.cyan);
-            yield return BettingRound(BettingStreet.Flop, NextSeat(_dealerIndex, 1));
+            yield return BettingRound(BettingStreet.Flop, NextSeatWithChips(_dealerIndex, 1));
         }
 
         private IEnumerator Turn()
@@ -168,7 +224,7 @@ namespace BoardGameSimulator.Poker
             RenderCards();
             RenderStaticUI(BettingStreet.Turn);
             promptView.Show("Turn", Color.cyan);
-            yield return BettingRound(BettingStreet.Turn, NextSeat(_dealerIndex, 1));
+            yield return BettingRound(BettingStreet.Turn, NextSeatWithChips(_dealerIndex, 1));
         }
 
         private IEnumerator River()
@@ -178,7 +234,7 @@ namespace BoardGameSimulator.Poker
             RenderCards();
             RenderStaticUI(BettingStreet.River);
             promptView.Show("River", Color.cyan);
-            yield return BettingRound(BettingStreet.River, NextSeat(_dealerIndex, 1));
+            yield return BettingRound(BettingStreet.River, NextSeatWithChips(_dealerIndex, 1));
         }
 
         private IEnumerator BettingRound(BettingStreet street, int startIndex)
@@ -192,7 +248,7 @@ namespace BoardGameSimulator.Poker
                 var player = _players[index];
                 index = NextSeat(index);
 
-                if (player.IsFolded || player.IsAllIn)
+                if (player.IsFolded || player.IsAllIn || player.Chips <= 0)
                 {
                     continue;
                 }
@@ -331,6 +387,7 @@ namespace BoardGameSimulator.Poker
                 case PlayerActionType.Fold:
                     player.IsFolded = true;
                     pending.Remove(player.Name);
+                    RecordAction(player.Name, "Fold");
                     promptView.Show($"{player.Name} Fold", Color.red);
                     return;
                 case PlayerActionType.AllIn:
@@ -348,6 +405,7 @@ namespace BoardGameSimulator.Poker
                         pending.Remove(player.Name);
                     }
 
+                    RecordAction(player.Name, "AllIn");
                     promptView.Show($"{player.Name} All in", new Color(1f, 0.5f, 0f));
                     return;
                 }
@@ -365,6 +423,7 @@ namespace BoardGameSimulator.Poker
                     AddToPot(paidToCall + paidRaise);
                     maxBet = player.CurrentBet;
                     pending = ActivePlayers().Where(p => !p.IsAllIn && p.Name != player.Name).Select(p => p.Name).ToHashSet();
+                    RecordAction(player.Name, $"Raise +{paidRaise}");
                     promptView.Show($"{player.Name} Raise +{paidRaise}", Color.magenta);
                     return;
                 }
@@ -372,6 +431,7 @@ namespace BoardGameSimulator.Poker
                 {
                     var paid = player.BetTo(callTarget);
                     AddToPot(paid);
+                    RecordAction(player.Name, "Call");
                     promptView.Show($"{player.Name} Call", Color.yellow);
                     pending.Remove(player.Name);
                     return;
@@ -384,6 +444,7 @@ namespace BoardGameSimulator.Poker
             if (action == PlayerActionType.Fold)
             {
                 player.IsFolded = true;
+                RecordAction(player.Name, "Fold");
                 promptView.Show($"{player.Name} Fold", Color.red);
                 pending.Remove(player.Name);
                 return;
@@ -404,6 +465,7 @@ namespace BoardGameSimulator.Poker
                     pending.Remove(player.Name);
                 }
 
+                RecordAction(player.Name, "AllIn");
                 promptView.Show($"{player.Name} All in", new Color(1f, 0.5f, 0f));
                 return;
             }
@@ -416,12 +478,14 @@ namespace BoardGameSimulator.Poker
                 AddToPot(paidToCall + paidRaise);
                 maxBet = player.CurrentBet;
                 pending = ActivePlayers().Where(p => !p.IsAllIn && p.Name != player.Name).Select(p => p.Name).ToHashSet();
+                RecordAction(player.Name, $"Raise +{paidRaise}");
                 promptView.Show($"{player.Name} Raise +{paidRaise}", Color.magenta);
                 return;
             }
 
             var paidCall = player.BetTo(callTarget);
             AddToPot(paidCall);
+            RecordAction(player.Name, "Call");
             promptView.Show($"{player.Name} Call", Color.yellow);
             pending.Remove(player.Name);
         }
@@ -473,11 +537,18 @@ namespace BoardGameSimulator.Poker
         private void ResolveShowdown()
         {
             var survivors = ActivePlayers();
+            if (survivors.Count == 0)
+            {
+                stateText.text = "没有可参与玩家，请房主重置筹码后再开始";
+                return;
+            }
+
             if (survivors.Count == 1)
             {
                 survivors[0].Chips += _pot;
+                RecordAction(survivors[0].Name, "Winner");
                 stateText.text = $"{survivors[0].Name} 因其他玩家弃牌获胜，赢得底池 {_pot}";
-                _dealerIndex = NextSeat(_dealerIndex);
+                _dealerIndex = NextSeatWithChips(_dealerIndex);
                 return;
             }
 
@@ -491,8 +562,9 @@ namespace BoardGameSimulator.Poker
                 .First();
 
             result.Player.Chips += _pot;
+            RecordAction(result.Player.Name, "Winner");
             stateText.text = $"赢家：{result.Player.Name}，牌型：{result.Hand.Rank}，底池：{_pot}";
-            _dealerIndex = NextSeat(_dealerIndex);
+            _dealerIndex = NextSeatWithChips(_dealerIndex);
         }
 
         private void AddToPot(int amount)
@@ -534,9 +606,30 @@ namespace BoardGameSimulator.Poker
             return (from + step) % _players.Count;
         }
 
+        private int NextSeatWithChips(int from, int step = 1)
+        {
+            var seat = from;
+            var moved = 0;
+            while (moved < step)
+            {
+                seat = NextSeat(seat);
+                if (_players[seat].Chips > 0)
+                {
+                    moved += 1;
+                }
+            }
+
+            return seat;
+        }
+
         private List<PokerPlayer> ActivePlayers()
         {
             return _players.Where(p => !p.IsFolded).ToList();
+        }
+
+        private List<PokerPlayer> PlayersWithChips()
+        {
+            return _players.Where(p => p.Chips > 0).ToList();
         }
 
         private void SetActionButtons(bool enabled)
@@ -559,12 +652,12 @@ namespace BoardGameSimulator.Poker
         {
             boardText.text = $"{street} | 公共牌：" + string.Join(" | ", _communityCards.Select(c => c.ToString()));
             playersText.text = string.Join("\n", _players.Select(p =>
-                $"{p.Name} {(p.IsFolded ? "[Fold]" : "")} {(p.IsAllIn ? "[AllIn]" : "")} Bet:{p.CurrentBet} 筹码:{p.Chips}"));
+                $"{p.Name} {(p.IsFolded ? "[Fold]" : "")} {(p.IsAllIn ? "[AllIn]" : "")} Bet:{p.CurrentBet} 筹码:{p.Chips} 动作:{(_lastActions.ContainsKey(p.Name) ? _lastActions[p.Name] : "-")}"));
         }
 
         private void RenderCards()
         {
-            if (playerCardViews.Count >= 2)
+            if (playerCardViews.Count >= 2 && _players[0].HoleCards.Count >= 2)
             {
                 playerCardViews[0].SetCard(_players[0].HoleCards[0], true);
                 playerCardViews[1].SetCard(_players[0].HoleCards[1], true);
@@ -588,6 +681,115 @@ namespace BoardGameSimulator.Poker
             {
                 _players.Add(new PokerPlayer($"Bot-{i}", initialChips, true));
             }
+        }
+
+        private void RecordAction(string playerName, string action)
+        {
+            _lastActions[playerName] = action;
+        }
+
+        private void EnterRoundChoiceState()
+        {
+            _waitingForRoundChoice = true;
+            var isOwnerOrOffline = SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0;
+            ToggleRoundChoiceButtons(isOwnerOrOffline);
+            if (isOwnerOrOffline)
+            {
+                promptView.Show("本轮结束：房主可选择下一轮或重置筹码", Color.white);
+            }
+            else
+            {
+                promptView.Show("本轮结束，等待房主开始下一轮", Color.white);
+            }
+        }
+
+        private void ToggleRoundChoiceButtons(bool enabled)
+        {
+            if (nextRoundButton != null)
+            {
+                nextRoundButton.interactable = enabled;
+            }
+
+            if (resetChipsButton != null)
+            {
+                resetChipsButton.interactable = enabled;
+            }
+        }
+
+        public void StartNextRound()
+        {
+            if (!_waitingForRoundChoice)
+            {
+                return;
+            }
+
+            StopAllCoroutines();
+            StartCoroutine(RoundLoop());
+        }
+
+        public void ResetChipsAndRestart()
+        {
+            if (!_waitingForRoundChoice)
+            {
+                return;
+            }
+
+            foreach (var player in _players)
+            {
+                player.Chips = initialChips;
+            }
+
+            StopAllCoroutines();
+            StartCoroutine(RoundLoop());
+        }
+
+        public void LeaveRoomAndBackLobby()
+        {
+            if (SessionContext.CurrentRoomId <= 0 || lobbyApiClient == null)
+            {
+                SessionContext.ClearRoom();
+                UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
+                return;
+            }
+
+            StartCoroutine(LeaveRoomCoroutine());
+        }
+
+        private IEnumerator LeaveRoomCoroutine()
+        {
+            var done = false;
+            StartCoroutine(lobbyApiClient.LeaveRoom(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+            {
+                done = true;
+                if (!result.Success)
+                {
+                    Debug.LogWarning($"退出房间失败：{result.Message}");
+                }
+            }));
+
+            while (!done)
+            {
+                yield return null;
+            }
+
+            SessionContext.ClearRoom();
+            UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
+        }
+
+        private void RenderRoomInfo()
+        {
+            if (roomText == null)
+            {
+                return;
+            }
+
+            if (SessionContext.CurrentRoomId > 0)
+            {
+                roomText.text = $"大厅代码：{SessionContext.CurrentRoomCode}";
+                return;
+            }
+
+            roomText.text = "当前模式：单机";
         }
     }
 }
