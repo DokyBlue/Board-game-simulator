@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -24,7 +25,7 @@ namespace BoardGameSimulator.Poker
         [SerializeField] private int initialChips = 2000;
         [SerializeField] private int smallBlind = 10;
         [SerializeField] private int bigBlind = 20;
-        [SerializeField] private int raiseStep = 20;
+        [SerializeField] private int defaultRaiseStep = 20;
         [SerializeField] private float botActionDelay = 0.5f;
 
         [Header("Text UI")]
@@ -35,7 +36,9 @@ namespace BoardGameSimulator.Poker
         [Header("Action UI")]
         [SerializeField] private Button callButton;
         [SerializeField] private Button raiseButton;
+        [SerializeField] private Button allInButton;
         [SerializeField] private Button foldButton;
+        [SerializeField] private TMP_InputField raiseAmountInput;
         [SerializeField] private ActionPromptView promptView;
         [SerializeField] private ChipAnimator chipAnimator;
 
@@ -49,7 +52,30 @@ namespace BoardGameSimulator.Poker
         private PokerDeck _deck;
         private int _pot;
         private int _dealerIndex;
-        private int _playerAction = -1; // 0 call,1 raise,2 fold
+        private PlayerActionType _playerAction = PlayerActionType.None;
+
+        private enum PlayerActionType
+        {
+            None,
+            Call,
+            Raise,
+            AllIn,
+            Fold
+        }
+
+        private enum BotStyle
+        {
+            Tight,
+            Balanced,
+            Aggressive,
+            Chaotic
+        }
+
+        private struct BotDecision
+        {
+            public PlayerActionType Action;
+            public int RaiseAmount;
+        }
 
         private void Start()
         {
@@ -60,9 +86,13 @@ namespace BoardGameSimulator.Poker
 
         private void HookButtons()
         {
-            callButton.onClick.AddListener(() => _playerAction = 0);
-            raiseButton.onClick.AddListener(() => _playerAction = 1);
-            foldButton.onClick.AddListener(() => _playerAction = 2);
+            callButton.onClick.AddListener(() => _playerAction = PlayerActionType.Call);
+            raiseButton.onClick.AddListener(() => _playerAction = PlayerActionType.Raise);
+            if (allInButton != null)
+            {
+                allInButton.onClick.AddListener(() => _playerAction = PlayerActionType.AllIn);
+            }
+            foldButton.onClick.AddListener(() => _playerAction = PlayerActionType.Fold);
             SetActionButtons(false);
         }
 
@@ -171,49 +201,273 @@ namespace BoardGameSimulator.Poker
                 if (player.IsBot)
                 {
                     yield return new WaitForSeconds(botActionDelay);
-                    var paid = player.BetTo(callTarget);
-                    AddToPot(paid);
-                    promptView.Show($"{player.Name} 选择 Call", Color.yellow);
-                    pending.Remove(player.Name);
+                    var decision = BuildBotDecision(player, street, callTarget);
+                    HandleBotDecision(player, decision, ref maxBet, ref pending);
+                    RenderStaticUI(street);
                     continue;
                 }
 
-                _playerAction = -1;
+                _playerAction = PlayerActionType.None;
                 SetActionButtons(true);
-                promptView.Show($"{street} 轮到你：Call / Raise / Fold", Color.green);
-                while (_playerAction < 0)
+                var toCall = Mathf.Max(0, callTarget - player.CurrentBet);
+                promptView.Show($"{street} 轮到你：To Call {toCall}", Color.green);
+                while (_playerAction == PlayerActionType.None)
                 {
                     yield return null;
                 }
 
                 SetActionButtons(false);
-                if (_playerAction == 2)
+                HandleHumanAction(player, _playerAction, callTarget, ref maxBet, ref pending);
+                RenderStaticUI(street);
+            }
+        }
+
+        private BotDecision BuildBotDecision(PokerPlayer player, BettingStreet street, int callTarget)
+        {
+            var toCall = Mathf.Max(0, callTarget - player.CurrentBet);
+            var board = player.HoleCards.Concat(_communityCards).ToList();
+            var handScore = PokerHandEvaluator.Evaluate(board);
+            var strength = RankScore(handScore.Rank);
+            var potPressure = _pot <= 0 ? 0f : (float)toCall / _pot;
+            var style = GetBotStyle(player.Name);
+            var roll = UnityEngine.Random.value;
+
+            if (player.Chips <= toCall)
+            {
+                if (strength >= 5 || roll > 0.7f)
                 {
-                    player.IsFolded = true;
-                    promptView.Show($"{player.Name} Fold", Color.red);
-                    pending.Remove(player.Name);
-                    continue;
+                    return new BotDecision { Action = PlayerActionType.AllIn };
                 }
 
-                if (_playerAction == 1)
+                return new BotDecision { Action = PlayerActionType.Fold };
+            }
+
+            var raiseBase = Mathf.Max(defaultRaiseStep, bigBlind);
+            var stageFactor = street switch
+            {
+                BettingStreet.Preflop => 1,
+                BettingStreet.Flop => 2,
+                BettingStreet.Turn => 3,
+                _ => 4
+            };
+
+            switch (style)
+            {
+                case BotStyle.Tight:
+                    if (strength <= 1 && potPressure > 0.25f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Fold };
+                    }
+
+                    if (strength >= 6 && roll > 0.4f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Raise, RaiseAmount = raiseBase * stageFactor };
+                    }
+
+                    return new BotDecision { Action = PlayerActionType.Call };
+
+                case BotStyle.Aggressive:
+                    if (strength >= 4 && roll > 0.2f)
+                    {
+                        var raise = raiseBase * (stageFactor + 1);
+                        if (raise >= player.Chips - toCall)
+                        {
+                            return new BotDecision { Action = PlayerActionType.AllIn };
+                        }
+
+                        return new BotDecision { Action = PlayerActionType.Raise, RaiseAmount = raise };
+                    }
+
+                    if (strength <= 1 && potPressure > 0.4f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Fold };
+                    }
+
+                    return new BotDecision { Action = PlayerActionType.Call };
+
+                case BotStyle.Chaotic:
+                    if (roll < 0.18f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Fold };
+                    }
+
+                    if (roll > 0.88f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.AllIn };
+                    }
+
+                    if (roll > 0.48f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Raise, RaiseAmount = raiseBase * UnityEngine.Random.Range(1, 5) };
+                    }
+
+                    return new BotDecision { Action = PlayerActionType.Call };
+
+                default:
+                    if (strength <= 1 && potPressure > 0.35f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Fold };
+                    }
+
+                    if (strength >= 5 && roll > 0.5f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.Raise, RaiseAmount = raiseBase * stageFactor };
+                    }
+
+                    if (strength >= 7 && roll > 0.25f)
+                    {
+                        return new BotDecision { Action = PlayerActionType.AllIn };
+                    }
+
+                    return new BotDecision { Action = PlayerActionType.Call };
+            }
+        }
+
+        private void HandleBotDecision(PokerPlayer player, BotDecision decision, ref int maxBet, ref HashSet<string> pending)
+        {
+            var callTarget = maxBet;
+            switch (decision.Action)
+            {
+                case PlayerActionType.Fold:
+                    player.IsFolded = true;
+                    pending.Remove(player.Name);
+                    promptView.Show($"{player.Name} Fold", Color.red);
+                    return;
+                case PlayerActionType.AllIn:
                 {
-                    var toCall = player.BetTo(callTarget);
-                    var raise = player.RaiseBy(raiseStep);
-                    AddToPot(toCall + raise);
+                    var paidToCall = player.BetTo(callTarget);
+                    var extra = player.AllIn();
+                    AddToPot(paidToCall + extra);
+                    if (player.CurrentBet > maxBet)
+                    {
+                        maxBet = player.CurrentBet;
+                        pending = ActivePlayers().Where(p => !p.IsAllIn && p.Name != player.Name).Select(p => p.Name).ToHashSet();
+                    }
+                    else
+                    {
+                        pending.Remove(player.Name);
+                    }
+
+                    promptView.Show($"{player.Name} All in", new Color(1f, 0.5f, 0f));
+                    return;
+                }
+                case PlayerActionType.Raise:
+                {
+                    var paidToCall = player.BetTo(callTarget);
+                    var raiseAmount = Mathf.Max(defaultRaiseStep, decision.RaiseAmount);
+                    var paidRaise = player.RaiseBy(raiseAmount);
+                    if (paidRaise <= 0)
+                    {
+                        pending.Remove(player.Name);
+                        return;
+                    }
+
+                    AddToPot(paidToCall + paidRaise);
                     maxBet = player.CurrentBet;
                     pending = ActivePlayers().Where(p => !p.IsAllIn && p.Name != player.Name).Select(p => p.Name).ToHashSet();
-                    promptView.Show($"{player.Name} Raise +{raiseStep}", Color.magenta);
+                    promptView.Show($"{player.Name} Raise +{paidRaise}", Color.magenta);
+                    return;
                 }
-                else
+                default:
                 {
                     var paid = player.BetTo(callTarget);
                     AddToPot(paid);
                     promptView.Show($"{player.Name} Call", Color.yellow);
                     pending.Remove(player.Name);
+                    return;
+                }
+            }
+        }
+
+        private void HandleHumanAction(PokerPlayer player, PlayerActionType action, int callTarget, ref int maxBet, ref HashSet<string> pending)
+        {
+            if (action == PlayerActionType.Fold)
+            {
+                player.IsFolded = true;
+                promptView.Show($"{player.Name} Fold", Color.red);
+                pending.Remove(player.Name);
+                return;
+            }
+
+            if (action == PlayerActionType.AllIn)
+            {
+                var paidToCall = player.BetTo(callTarget);
+                var extra = player.AllIn();
+                AddToPot(paidToCall + extra);
+                if (player.CurrentBet > maxBet)
+                {
+                    maxBet = player.CurrentBet;
+                    pending = ActivePlayers().Where(p => !p.IsAllIn && p.Name != player.Name).Select(p => p.Name).ToHashSet();
+                }
+                else
+                {
+                    pending.Remove(player.Name);
                 }
 
-                RenderStaticUI(street);
+                promptView.Show($"{player.Name} All in", new Color(1f, 0.5f, 0f));
+                return;
             }
+
+            if (action == PlayerActionType.Raise)
+            {
+                var paidToCall = player.BetTo(callTarget);
+                var raiseAmount = ParseRaiseAmount();
+                var paidRaise = player.RaiseBy(raiseAmount);
+                AddToPot(paidToCall + paidRaise);
+                maxBet = player.CurrentBet;
+                pending = ActivePlayers().Where(p => !p.IsAllIn && p.Name != player.Name).Select(p => p.Name).ToHashSet();
+                promptView.Show($"{player.Name} Raise +{paidRaise}", Color.magenta);
+                return;
+            }
+
+            var paidCall = player.BetTo(callTarget);
+            AddToPot(paidCall);
+            promptView.Show($"{player.Name} Call", Color.yellow);
+            pending.Remove(player.Name);
+        }
+
+        private int ParseRaiseAmount()
+        {
+            if (raiseAmountInput == null)
+            {
+                return defaultRaiseStep;
+            }
+
+            if (!int.TryParse(raiseAmountInput.text, out var raiseAmount) || raiseAmount <= 0)
+            {
+                return defaultRaiseStep;
+            }
+
+            return raiseAmount;
+        }
+
+        private static BotStyle GetBotStyle(string playerName)
+        {
+            return Math.Abs(playerName.GetHashCode()) % 4 switch
+            {
+                0 => BotStyle.Tight,
+                1 => BotStyle.Balanced,
+                2 => BotStyle.Aggressive,
+                _ => BotStyle.Chaotic
+            };
+        }
+
+        private static int RankScore(HandRank rank)
+        {
+            return rank switch
+            {
+                HandRank.HighCard => 1,
+                HandRank.OnePair => 2,
+                HandRank.TwoPairs => 3,
+                HandRank.ThreeOfAKind => 4,
+                HandRank.Straight => 5,
+                HandRank.Flush => 6,
+                HandRank.FullHouse => 7,
+                HandRank.FourOfAKind => 8,
+                HandRank.StraightFlush => 9,
+                HandRank.RoyalFlush => 10,
+                _ => 0
+            };
         }
 
         private void ResolveShowdown()
@@ -290,13 +544,22 @@ namespace BoardGameSimulator.Poker
             callButton.interactable = enabled;
             raiseButton.interactable = enabled;
             foldButton.interactable = enabled;
+            if (allInButton != null)
+            {
+                allInButton.interactable = enabled;
+            }
+
+            if (raiseAmountInput != null)
+            {
+                raiseAmountInput.interactable = enabled;
+            }
         }
 
         private void RenderStaticUI(BettingStreet street)
         {
             boardText.text = $"{street} | 公共牌：" + string.Join(" | ", _communityCards.Select(c => c.ToString()));
             playersText.text = string.Join("\n", _players.Select(p =>
-                $"{p.Name} {(p.IsFolded ? "[Fold]" : "")} Bet:{p.CurrentBet} 筹码:{p.Chips}"));
+                $"{p.Name} {(p.IsFolded ? "[Fold]" : "")} {(p.IsAllIn ? "[AllIn]" : "")} Bet:{p.CurrentBet} 筹码:{p.Chips}"));
         }
 
         private void RenderCards()
