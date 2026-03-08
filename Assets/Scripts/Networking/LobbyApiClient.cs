@@ -22,6 +22,12 @@ namespace BoardGameSimulator.Networking
             yield return Post("/lobby/rooms/join", body, token, callback);
         }
 
+        public IEnumerator LeaveRoom(long roomId, string token, Action<LobbyApiResult> callback)
+        {
+            var body = JsonUtility.ToJson(new LeaveRoomRequest { roomId = roomId });
+            yield return Post("/lobby/rooms/leave", body, token, callback);
+        }
+
         private IEnumerator Post(string path, string body, string token, Action<LobbyApiResult> callback)
         {
             using (var request = new UnityWebRequest(baseUrl + path, UnityWebRequest.kHttpVerbPOST))
@@ -45,7 +51,13 @@ namespace BoardGameSimulator.Networking
                     yield break;
                 }
 
-                var response = JsonUtility.FromJson<LobbyResponse>(request.downloadHandler.text);
+                LobbyResponse response = null;
+                var raw = request.downloadHandler.text;
+                if (!string.IsNullOrWhiteSpace(raw) && raw.Contains("\"room\""))
+                {
+                    response = JsonUtility.FromJson<LobbyResponse>(raw);
+                }
+
                 callback?.Invoke(new LobbyApiResult(true, "ok", response));
             }
         }
@@ -76,6 +88,12 @@ namespace BoardGameSimulator.Networking
         }
 
         [Serializable]
+        private class LeaveRoomRequest
+        {
+            public long roomId;
+        }
+
+        [Serializable]
         public class LobbyResponse
         {
             public LobbyRoom room;
@@ -87,6 +105,7 @@ namespace BoardGameSimulator.Networking
             public long id;
             public string code;
             public string gameKey;
+            public long ownerUserId;
         }
 
         [Serializable]

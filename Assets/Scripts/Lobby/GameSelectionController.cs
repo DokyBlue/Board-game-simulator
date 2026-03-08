@@ -12,6 +12,7 @@ namespace BoardGameSimulator.Lobby
         [SerializeField] private TMP_Text welcomeText;
         [SerializeField] private TMP_Text statusText;
         [SerializeField] private TMP_InputField joinRoomCodeInput;
+        [SerializeField] private GameObject texasHoldemModePanel;
 
         [Header("API")]
         [SerializeField] private LobbyApiClient lobbyApiClient;
@@ -31,12 +32,26 @@ namespace BoardGameSimulator.Lobby
             }
 
             welcomeText.text = $"欢迎，{SessionContext.CurrentUser}";
-            SetStatus("请选择德州扑克并创建或加入房间", Color.white);
+            SetTexasModePanel(false);
+            SetStatus("请选择游戏", Color.white);
         }
 
         public void EnterTexasHoldem()
         {
+            SetTexasModePanel(true);
+            SetStatus("请选择单机模式、创建房间或加入房间", Color.white);
+        }
+
+        public void StartTexasHoldemOffline()
+        {
+            SessionContext.ClearRoom();
             SceneManager.LoadScene(texasHoldemScene);
+        }
+
+        public void BackToGameSelectionRoot()
+        {
+            SetTexasModePanel(false);
+            SetStatus("请选择游戏", Color.white);
         }
 
         public void CreateTexasHoldemRoom()
@@ -72,26 +87,44 @@ namespace BoardGameSimulator.Lobby
 
         private void HandleCreateRoom(LobbyApiResult result)
         {
-            if (!result.Success)
+            if (!result.Success || result.Response?.room == null)
             {
                 SetStatus(result.Message, Color.red);
                 return;
             }
 
-            SetStatus($"房间已创建：{result.Response.room.code}", Color.green);
+            SessionContext.SetRoom(
+                result.Response.room.id,
+                result.Response.room.code,
+                result.Response.room.gameKey,
+                result.Response.room.ownerUserId == SessionContext.UserId);
+            SetStatus($"房间已创建，大厅代码：{result.Response.room.code}", Color.green);
             SceneManager.LoadScene(texasHoldemScene);
         }
 
         private void HandleJoinRoom(LobbyApiResult result)
         {
-            if (!result.Success)
+            if (!result.Success || result.Response?.room == null)
             {
                 SetStatus(result.Message, Color.red);
                 return;
             }
 
+            SessionContext.SetRoom(
+                result.Response.room.id,
+                result.Response.room.code,
+                result.Response.room.gameKey,
+                result.Response.room.ownerUserId == SessionContext.UserId);
             SetStatus($"已加入房间：{result.Response.room.code}", Color.green);
             SceneManager.LoadScene(texasHoldemScene);
+        }
+
+        private void SetTexasModePanel(bool visible)
+        {
+            if (texasHoldemModePanel != null)
+            {
+                texasHoldemModePanel.SetActive(visible);
+            }
         }
 
         private void SetStatus(string message, Color color)

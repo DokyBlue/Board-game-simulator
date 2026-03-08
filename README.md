@@ -6,8 +6,10 @@
 - Unity 客户端注册/登录（调用后端接口）
 - 游戏大厅（可扩展多游戏入口）
 - 德州扑克完整下注街：Preflop / Flop / Turn / River
-- 玩家操作：Call / Raise / Fold
-- 1 名本地玩家 + 5 名 Bot（Bot 固定策略：自动跟注）
+- 玩家操作：Call / Raise / Fold / AllIn
+- 1 名本地玩家 + 5 名 Bot（Bot 多策略）
+- 游戏结束后房主可选择“下一局”或“重置所有筹码后重开”
+- 0 筹码玩家自动跳过，无法参与当局
 - 基础 UI 美术资源（卡牌、筹码、行动按钮、桌布）
 
 ---
@@ -31,6 +33,21 @@ npm start
 默认监听 `http://127.0.0.1:8080`。
 
 ### 1.2 Unity 客户端场景
+
+
+### 1.3 使用 Ngrok 远程联机（内网穿透）
+
+1. 保持后端在本机 `8080` 端口运行。
+2. 本机执行：
+
+```bash
+ngrok http 8080
+```
+
+3. 复制 Ngrok 提供的 `https://xxxxx.ngrok-free.app` 地址。
+4. 在 Unity 场景中把 `AuthApiClient` 和 `LobbyApiClient` 的 `baseUrl` 改为该地址。
+5. 远端玩家使用同一个地址即可进行注册、登录、创建/加入大厅。
+
 
 请建立并加入 Build Settings：
 
