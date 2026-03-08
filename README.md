@@ -105,4 +105,5 @@ ngrok http 8080
 - `Assets/Art/`：基础美术资源
 - `Backend/`：Node + MySQL + JWT 登录服务
 - `Docs/`：详细技术文档
+  - `Docs/Modules/`：按模块拆分的代码说明文档（Core/Auth/Networking/Lobby/Poker/UI/Models）
 

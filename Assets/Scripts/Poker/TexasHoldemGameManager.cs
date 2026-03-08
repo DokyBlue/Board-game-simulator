@@ -43,7 +43,11 @@ namespace BoardGameSimulator.Poker
         [SerializeField] private Button nextRoundButton;
         [SerializeField] private Button resetChipsButton;
         [SerializeField] private Button leaveRoomButton;
+        [SerializeField] private Button historyQueryButton;
+        [SerializeField] private Button historyClearButton;
         [SerializeField] private TMP_InputField raiseAmountInput;
+        [SerializeField] private TMP_InputField historyQueryInput;
+        [SerializeField] private TMP_Text historyText;
         [SerializeField] private ActionPromptView promptView;
         [SerializeField] private ChipAnimator chipAnimator;
         [SerializeField] private LobbyApiClient lobbyApiClient;
@@ -62,8 +66,12 @@ namespace BoardGameSimulator.Poker
         private int _pot;
         private int _dealerIndex;
         private bool _waitingForRoundChoice;
+        private int _roundNumber = 1;
         private PlayerActionType _playerAction = PlayerActionType.None;
         private readonly Dictionary<string, string> _lastActions = new Dictionary<string, string>();
+        private readonly Dictionary<string, BotStyle> _botStyles = new Dictionary<string, BotStyle>();
+        private readonly List<string> _actionHistory = new List<string>();
+        private const int MaxHistoryEntries = 160;
 
         private enum PlayerActionType
         {
@@ -93,6 +101,8 @@ namespace BoardGameSimulator.Poker
             CreateTable();
             HookButtons();
             RenderRoomInfo();
+            RefreshStrategyPanel();
+            QueryHistory();
             StartCoroutine(RoundLoop());
         }
 
@@ -122,6 +132,24 @@ namespace BoardGameSimulator.Poker
             if (leaveRoomButton != null)
             {
                 leaveRoomButton.onClick.AddListener(LeaveRoomAndBackLobby);
+            }
+
+            if (historyQueryButton != null)
+            {
+                historyQueryButton.onClick.AddListener(QueryHistory);
+            }
+
+            if (historyClearButton != null)
+            {
+                historyClearButton.onClick.AddListener(() =>
+                {
+                    if (historyQueryInput != null)
+                    {
+                        historyQueryInput.text = string.Empty;
+                    }
+
+                    QueryHistory();
+                });
             }
 
             SetActionButtons(false);
@@ -174,6 +202,7 @@ namespace BoardGameSimulator.Poker
             _deck = new PokerDeck();
             _deck.Shuffle();
             _lastActions.Clear();
+            AppendHistory($"---- Round {_roundNumber} ----");
 
             foreach (var player in _players)
             {
@@ -198,6 +227,7 @@ namespace BoardGameSimulator.Poker
             }
 
             RenderCards();
+            RefreshStrategyPanel();
             RenderStaticUI(BettingStreet.Preflop);
         }
 
@@ -505,15 +535,22 @@ namespace BoardGameSimulator.Poker
             return raiseAmount;
         }
 
-        private static BotStyle GetBotStyle(string playerName)
+        private BotStyle GetBotStyle(string playerName)
         {
-            return Math.Abs(playerName.GetHashCode()) % 4 switch
+            if (_botStyles.TryGetValue(playerName, out var style))
+            {
+                return style;
+            }
+
+            var fallback = Math.Abs(playerName.GetHashCode()) % 4 switch
             {
                 0 => BotStyle.Tight,
                 1 => BotStyle.Balanced,
                 2 => BotStyle.Aggressive,
                 _ => BotStyle.Chaotic
             };
+            _botStyles[playerName] = fallback;
+            return fallback;
         }
 
         private static int RankScore(HandRank rank)
@@ -675,17 +712,85 @@ namespace BoardGameSimulator.Poker
         private void CreateTable()
         {
             _players.Clear();
+            _botStyles.Clear();
             var userName = string.IsNullOrWhiteSpace(SessionContext.CurrentUser) ? "Player" : SessionContext.CurrentUser;
             _players.Add(new PokerPlayer(userName, initialChips, false));
             for (var i = 1; i <= 5; i++)
             {
-                _players.Add(new PokerPlayer($"Bot-{i}", initialChips, true));
+                var botName = $"Bot-{i}";
+                _players.Add(new PokerPlayer(botName, initialChips, true));
+                _botStyles[botName] = Math.Abs(botName.GetHashCode()) % 4 switch
+                {
+                    0 => BotStyle.Tight,
+                    1 => BotStyle.Balanced,
+                    2 => BotStyle.Aggressive,
+                    _ => BotStyle.Chaotic
+                };
             }
         }
 
         private void RecordAction(string playerName, string action)
         {
             _lastActions[playerName] = action;
+            AppendHistory($"R{_roundNumber} | {playerName}: {action}");
+            RefreshStrategyPanel();
+        }
+
+        private void AppendHistory(string entry)
+        {
+            _actionHistory.Add(entry);
+            if (_actionHistory.Count > MaxHistoryEntries)
+            {
+                _actionHistory.RemoveAt(0);
+            }
+
+            QueryHistory();
+        }
+
+        private void QueryHistory()
+        {
+            if (historyText == null)
+            {
+                return;
+            }
+
+            var keyword = historyQueryInput == null ? string.Empty : historyQueryInput.text.Trim();
+            var rows = _actionHistory
+                .Where(item => string.IsNullOrWhiteSpace(keyword) || item.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                .TakeLast(20)
+                .ToList();
+
+            historyText.text = rows.Count == 0
+                ? "暂无匹配历史记录"
+                : string.Join("\n", rows);
+        }
+
+        private void RefreshStrategyPanel()
+        {
+            if (promptView == null)
+            {
+                return;
+            }
+
+            var lines = _players
+                .Where(p => p.IsBot)
+                .Select(p =>
+                {
+                    var action = _lastActions.TryGetValue(p.Name, out var lastAction) ? lastAction : "Waiting";
+                    return $"{p.Name} | {BotStyleDescription(GetBotStyle(p.Name))} | 最近动作: {action}";
+                });
+            promptView.SetStrategySnapshot(string.Join("\n", lines));
+        }
+
+        private static string BotStyleDescription(BotStyle style)
+        {
+            return style switch
+            {
+                BotStyle.Tight => "Tight：保守，仅强牌重注",
+                BotStyle.Balanced => "Balanced：中庸，按压力调整",
+                BotStyle.Aggressive => "Aggressive：激进，偏好加注",
+                _ => "Chaotic：随机，波动较大"
+            };
         }
 
         private void EnterRoundChoiceState()
@@ -723,6 +828,7 @@ namespace BoardGameSimulator.Poker
                 return;
             }
 
+            _roundNumber += 1;
             StopAllCoroutines();
             StartCoroutine(RoundLoop());
         }
@@ -739,6 +845,9 @@ namespace BoardGameSimulator.Poker
                 player.Chips = initialChips;
             }
 
+            _roundNumber = 1;
+            _actionHistory.Clear();
+            QueryHistory();
             StopAllCoroutines();
             StartCoroutine(RoundLoop());
         }
