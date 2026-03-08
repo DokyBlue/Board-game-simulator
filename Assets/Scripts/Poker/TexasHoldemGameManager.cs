@@ -75,6 +75,7 @@ namespace BoardGameSimulator.Poker
         private readonly Dictionary<string, BotStyle> _botStyles = new Dictionary<string, BotStyle>();
         private readonly List<string> _actionHistory = new List<string>();
         private const int MaxHistoryEntries = 160;
+        private const int MaxRoomPlayers = 6;
 
         private enum PlayerActionType
         {
@@ -101,11 +102,18 @@ namespace BoardGameSimulator.Poker
 
         private void Start()
         {
-            CreateTable();
             HookButtons();
             RenderRoomInfo();
             RefreshStrategyPanel();
             QueryHistory();
+
+            if (SessionContext.CurrentRoomId > 0)
+            {
+                StartCoroutine(LoadRoomAndStart());
+                return;
+            }
+
+            CreateTable();
             StartCoroutine(RoundLoop());
         }
 
@@ -167,6 +175,7 @@ namespace BoardGameSimulator.Poker
         {
             _waitingForRoundChoice = false;
             ToggleRoundChoiceButtons(false);
+            SetActionButtons(false);
             PrepareRound();
 
             if (PlayersWithChips().Count <= 1)
@@ -718,11 +727,18 @@ namespace BoardGameSimulator.Poker
             // 将数据分发给每个独立的座位 UI
             for (int i = 0; i < _players.Count; i++)
             {
-                // 确保场景中绑定的座位 UI 数量足够
                 if (playerSeatViews != null && i < playerSeatViews.Count)
                 {
                     string action = _lastActions.ContainsKey(_players[i].Name) ? _lastActions[_players[i].Name] : "-";
                     playerSeatViews[i].UpdateSeat(_players[i], action);
+                }
+            }
+
+            if (playerSeatViews != null)
+            {
+                for (int i = _players.Count; i < playerSeatViews.Count; i++)
+                {
+                    playerSeatViews[i].UpdateSeat(null, "-");
                 }
             }
         }
@@ -744,10 +760,94 @@ namespace BoardGameSimulator.Poker
             }
         }
 
+
+        private IEnumerator LoadRoomAndStart()
+        {
+            if (lobbyApiClient == null)
+            {
+                CreateTable();
+                StartCoroutine(RoundLoop());
+                yield break;
+            }
+
+            LobbyMembersApiResult apiResult = null;
+            yield return StartCoroutine(lobbyApiClient.GetRoomMembers(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+            {
+                apiResult = result;
+            }));
+
+            if (apiResult == null || !apiResult.Success || apiResult.Response == null || apiResult.Response.members == null || apiResult.Response.members.Length == 0)
+            {
+                CreateTable();
+                if (stateText != null && apiResult != null && !string.IsNullOrWhiteSpace(apiResult.Message))
+                {
+                    stateText.text = $"获取房间成员失败：{apiResult.Message}";
+                }
+
+                StartCoroutine(RoundLoop());
+                yield break;
+            }
+
+            CreateTableFromRoomMembers(apiResult.Response.members);
+
+            if (SessionContext.AutoStartOnSceneEnter || SessionContext.CurrentRoomId == 0)
+            {
+                SessionContext.AutoStartOnSceneEnter = false;
+                StartCoroutine(RoundLoop());
+                yield break;
+            }
+
+            _waitingForRoundChoice = true;
+            ToggleRoundChoiceButtons(SessionContext.IsRoomOwner);
+            if (stateText != null)
+            {
+                stateText.text = "等待房主点击 Next Round 开始新游戏";
+            }
+
+            if (promptView != null)
+            {
+                promptView.Show("等待房主点击 Next Round 开始新游戏", Color.white);
+            }
+
+            RenderStaticUI(BettingStreet.Preflop);
+        }
+
+        private void CreateTableFromRoomMembers(LobbyApiClient.LobbyMember[] members)
+        {
+            _players.Clear();
+            _botStyles.Clear();
+            _lastActions.Clear();
+
+            var memberList = members
+                .Where(member => member != null && !string.IsNullOrWhiteSpace(member.username))
+                .Take(MaxRoomPlayers)
+                .ToList();
+
+            if (memberList.Count == 0)
+            {
+                var fallbackName = string.IsNullOrWhiteSpace(SessionContext.CurrentUser) ? "Player" : SessionContext.CurrentUser;
+                _players.Add(new PokerPlayer(fallbackName, initialChips, false));
+            }
+            else
+            {
+                foreach (var member in memberList)
+                {
+                    var isSelf = member.userId == SessionContext.UserId;
+                    _players.Add(new PokerPlayer(member.username, initialChips, !isSelf));
+                }
+            }
+
+            for (var i = 0; i < _players.Count; i++)
+            {
+                _lastActions[_players[i].Name] = "Waiting";
+            }
+        }
+
         private void CreateTable()
         {
             _players.Clear();
             _botStyles.Clear();
+            _lastActions.Clear();
             var userName = string.IsNullOrWhiteSpace(SessionContext.CurrentUser) ? "Player" : SessionContext.CurrentUser;
             _players.Add(new PokerPlayer(userName, initialChips, false));
             for (var i = 1; i <= 5; i++)
@@ -834,6 +934,7 @@ namespace BoardGameSimulator.Poker
             _waitingForRoundChoice = true;
             var isOwnerOrOffline = SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0;
             ToggleRoundChoiceButtons(isOwnerOrOffline);
+            SetActionButtons(false);
             if (isOwnerOrOffline)
             {
                 promptView.Show("本轮结束：房主可选择下一轮或重置筹码", Color.white);
@@ -864,6 +965,11 @@ namespace BoardGameSimulator.Poker
                 return;
             }
 
+            if (SessionContext.CurrentRoomId > 0 && !SessionContext.IsRoomOwner)
+            {
+                return;
+            }
+
             _roundNumber += 1;
             StopAllCoroutines();
             StartCoroutine(RoundLoop());
@@ -872,6 +978,11 @@ namespace BoardGameSimulator.Poker
         public void ResetChipsAndRestart()
         {
             if (!_waitingForRoundChoice)
+            {
+                return;
+            }
+
+            if (SessionContext.CurrentRoomId > 0 && !SessionContext.IsRoomOwner)
             {
                 return;
             }

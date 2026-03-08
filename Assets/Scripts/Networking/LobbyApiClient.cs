@@ -28,6 +28,32 @@ namespace BoardGameSimulator.Networking
             yield return Post("/lobby/rooms/leave", body, token, callback);
         }
 
+        public IEnumerator GetRoomMembers(long roomId, string token, Action<LobbyMembersApiResult> callback)
+        {
+            using (var request = UnityWebRequest.Get($"{baseUrl}/lobby/rooms/{roomId}/members"))
+            {
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Authorization", $"Bearer {token}");
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    callback?.Invoke(new LobbyMembersApiResult(false, request.error, null));
+                    yield break;
+                }
+
+                if (request.responseCode >= 400)
+                {
+                    callback?.Invoke(new LobbyMembersApiResult(false, ParseError(request.downloadHandler.text), null));
+                    yield break;
+                }
+
+                var response = JsonUtility.FromJson<LobbyMembersResponse>(request.downloadHandler.text);
+                callback?.Invoke(new LobbyMembersApiResult(true, "ok", response));
+            }
+        }
+
         private IEnumerator Post(string path, string body, string token, Action<LobbyApiResult> callback)
         {
             using (var request = new UnityWebRequest(baseUrl + path, UnityWebRequest.kHttpVerbPOST))
@@ -109,6 +135,21 @@ namespace BoardGameSimulator.Networking
         }
 
         [Serializable]
+        public class LobbyMembersResponse
+        {
+            public long roomId;
+            public LobbyMember[] members;
+        }
+
+        [Serializable]
+        public class LobbyMember
+        {
+            public long userId;
+            public string username;
+            public int isOwner;
+        }
+
+        [Serializable]
         private class ErrorResponse
         {
             public string message;
@@ -122,6 +163,20 @@ namespace BoardGameSimulator.Networking
         public readonly LobbyApiClient.LobbyResponse Response;
 
         public LobbyApiResult(bool success, string message, LobbyApiClient.LobbyResponse response)
+        {
+            Success = success;
+            Message = message;
+            Response = response;
+        }
+    }
+
+    public class LobbyMembersApiResult
+    {
+        public readonly bool Success;
+        public readonly string Message;
+        public readonly LobbyApiClient.LobbyMembersResponse Response;
+
+        public LobbyMembersApiResult(bool success, string message, LobbyApiClient.LobbyMembersResponse response)
         {
             Success = success;
             Message = message;
