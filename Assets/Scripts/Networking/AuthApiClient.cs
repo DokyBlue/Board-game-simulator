@@ -1,3 +1,4 @@
+using BoardGameSimulator.Core;
 using System;
 using System.Collections;
 using System.Text;
@@ -8,7 +9,7 @@ namespace BoardGameSimulator.Networking
 {
     public class AuthApiClient : MonoBehaviour
     {
-        [SerializeField] private string baseUrl = "http://127.0.0.1:8080";
+        //[SerializeField] private string baseUrl = "http://127.0.0.1:8080";
 
         public IEnumerator Register(string username, string password, Action<AuthApiResult> callback)
         {
@@ -28,7 +29,7 @@ namespace BoardGameSimulator.Networking
                 password = password
             });
 
-            using (var request = new UnityWebRequest(baseUrl + path, UnityWebRequest.kHttpVerbPOST))
+            using (var request = new UnityWebRequest(SessionContext.ServerBaseUrl + path, UnityWebRequest.kHttpVerbPOST))
             {
                 request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(payload));
                 request.downloadHandler = new DownloadHandlerBuffer();

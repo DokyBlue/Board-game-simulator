@@ -2,6 +2,9 @@ namespace BoardGameSimulator.Core
 {
     public static class SessionContext
     {
+
+        // 用于全局保存服务器地址，默认使用本地测试地址
+        public static string ServerBaseUrl { get; set; } = "http://127.0.0.1:8080";
         public static long UserId { get; set; }
         public static string CurrentUser { get; set; }
         public static string AccessToken { get; set; }

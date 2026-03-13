@@ -1,3 +1,4 @@
+using BoardGameSimulator.Core;
 using System;
 using System.Collections;
 using System.Text;
@@ -8,7 +9,7 @@ namespace BoardGameSimulator.Networking
 {
     public class LobbyApiClient : MonoBehaviour
     {
-        [SerializeField] private string baseUrl = "http://127.0.0.1:8080";
+        //[SerializeField] private string baseUrl = "http://127.0.0.1:8080";
 
         public IEnumerator CreateRoom(string gameKey, string token, Action<LobbyApiResult> callback)
         {
@@ -30,7 +31,7 @@ namespace BoardGameSimulator.Networking
 
         public IEnumerator GetRoomMembers(long roomId, string token, Action<LobbyMembersApiResult> callback)
         {
-            using (var request = UnityWebRequest.Get($"{baseUrl}/lobby/rooms/{roomId}/members"))
+            using (var request = UnityWebRequest.Get($"{SessionContext.ServerBaseUrl}/lobby/rooms/{roomId}/members"))
             {
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Authorization", $"Bearer {token}");
@@ -56,7 +57,7 @@ namespace BoardGameSimulator.Networking
 
         private IEnumerator Post(string path, string body, string token, Action<LobbyApiResult> callback)
         {
-            using (var request = new UnityWebRequest(baseUrl + path, UnityWebRequest.kHttpVerbPOST))
+            using (var request = new UnityWebRequest(SessionContext.ServerBaseUrl + path, UnityWebRequest.kHttpVerbPOST))
             {
                 request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
                 request.downloadHandler = new DownloadHandlerBuffer();
