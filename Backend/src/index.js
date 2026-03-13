@@ -31,6 +31,59 @@ const pool = mysql.createPool({
   connectionLimit: 10
 });
 
+const roomEventStreams = new Map();
+const roomRuntimeState = new Map();
+
+function getRoomState(roomId) {
+  const normalizedRoomId = Number(roomId);
+  if (!roomRuntimeState.has(normalizedRoomId)) {
+    roomRuntimeState.set(normalizedRoomId, { started: false, startedAt: null });
+  }
+
+  return roomRuntimeState.get(normalizedRoomId);
+}
+
+function closeRoomStreams(roomId) {
+  const normalizedRoomId = Number(roomId);
+  const streams = roomEventStreams.get(normalizedRoomId) || new Set();
+  for (const stream of streams) {
+    stream.end();
+  }
+
+  roomEventStreams.delete(normalizedRoomId);
+}
+
+function broadcastRoomEvent(roomId, payload) {
+  const normalizedRoomId = Number(roomId);
+  const streams = roomEventStreams.get(normalizedRoomId) || new Set();
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const stream of streams) {
+    stream.write(data);
+  }
+}
+
+async function getRoomMembers(roomId) {
+  const [members] = await pool.query(
+    `SELECT rm.user_id AS userId, u.username, rm.is_owner AS isOwner
+     FROM room_members rm
+     INNER JOIN users u ON u.id = rm.user_id
+     WHERE rm.room_id = ?
+     ORDER BY rm.joined_at ASC`,
+    [roomId]
+  );
+
+  return members;
+}
+
+async function broadcastRoomMembers(roomId) {
+  const members = await getRoomMembers(roomId);
+  broadcastRoomEvent(roomId, {
+    type: 'members-updated',
+    roomId: Number(roomId),
+    members
+  });
+}
+
 function buildToken(user) {
   return jwt.sign({ uid: user.id, username: user.username }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN
@@ -217,6 +270,7 @@ app.post('/lobby/rooms/join', authRequired, async (req, res) => {
 
     const room = rooms[0];
     const [members] = await pool.query('SELECT id FROM room_members WHERE room_id = ? AND user_id = ? LIMIT 1', [room.id, userId]);
+    let isNewMember = false;
     if (members.length === 0) {
       const [memberCountRows] = await pool.query('SELECT COUNT(1) AS count FROM room_members WHERE room_id = ?', [room.id]);
       const memberCount = Number(memberCountRows[0]?.count || 0);
@@ -225,6 +279,11 @@ app.post('/lobby/rooms/join', authRequired, async (req, res) => {
       }
 
       await pool.query('INSERT INTO room_members(room_id, user_id, is_owner) VALUES(?, ?, 0)', [room.id, userId]);
+      isNewMember = true;
+    }
+
+    if (isNewMember) {
+      await broadcastRoomMembers(room.id);
     }
 
     return res.json({
@@ -259,14 +318,7 @@ app.get('/lobby/rooms/:roomId/members', authRequired, async (req, res) => {
       return res.status(403).json({ message: '仅房间成员可查看成员列表' });
     }
 
-    const [members] = await pool.query(
-      `SELECT rm.user_id AS userId, u.username, rm.is_owner AS isOwner
-       FROM room_members rm
-       INNER JOIN users u ON u.id = rm.user_id
-       WHERE rm.room_id = ?
-       ORDER BY rm.joined_at ASC`,
-      [roomId]
-    );
+    const members = await getRoomMembers(roomId);
 
     return res.json({
       roomId,
@@ -295,6 +347,8 @@ app.post('/lobby/rooms/leave', authRequired, async (req, res) => {
     const room = rooms[0];
     if (Number(room.owner_user_id) === Number(userId)) {
       await pool.query('DELETE FROM game_rooms WHERE id = ?', [roomId]);
+      closeRoomStreams(roomId);
+      roomRuntimeState.delete(Number(roomId));
       return res.json({ message: '房主已离开，房间已销毁' });
     }
 
@@ -302,12 +356,120 @@ app.post('/lobby/rooms/leave', authRequired, async (req, res) => {
     const [members] = await pool.query('SELECT id FROM room_members WHERE room_id = ? LIMIT 1', [roomId]);
     if (members.length === 0) {
       await pool.query('DELETE FROM game_rooms WHERE id = ?', [roomId]);
+      closeRoomStreams(roomId);
+      roomRuntimeState.delete(Number(roomId));
       return res.json({ message: '房间无人，已自动销毁' });
     }
+
+    await broadcastRoomMembers(roomId);
 
     return res.json({ message: '已退出房间' });
   } catch (error) {
     return res.status(500).json({ message: '退出房间失败', detail: error.message });
+  }
+});
+
+app.get('/lobby/rooms/:roomId/events', authRequired, async (req, res) => {
+  const roomId = Number(req.params.roomId || 0);
+  const userId = Number(req.user.uid || 0);
+
+  if (!roomId) {
+    return res.status(400).json({ message: 'roomId不能为空' });
+  }
+
+  try {
+    const [membershipRows] = await pool.query(
+      'SELECT id FROM room_members WHERE room_id = ? AND user_id = ? LIMIT 1',
+      [roomId, userId]
+    );
+
+    if (membershipRows.length === 0) {
+      return res.status(403).json({ message: '仅房间成员可订阅房间事件' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    if (!roomEventStreams.has(roomId)) {
+      roomEventStreams.set(roomId, new Set());
+    }
+
+    roomEventStreams.get(roomId).add(res);
+
+    const members = await getRoomMembers(roomId);
+    const roomState = getRoomState(roomId);
+    res.write(
+      `data: ${JSON.stringify({
+        type: 'room-snapshot',
+        roomId,
+        members,
+        gameStarted: roomState.started,
+        startedAt: roomState.startedAt
+      })}\n\n`
+    );
+
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 20000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      const roomStreams = roomEventStreams.get(roomId);
+      if (!roomStreams) {
+        return;
+      }
+
+      roomStreams.delete(res);
+      if (roomStreams.size === 0) {
+        roomEventStreams.delete(roomId);
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '订阅房间事件失败', detail: error.message });
+  }
+});
+
+app.post('/lobby/rooms/:roomId/start', authRequired, async (req, res) => {
+  const roomId = Number(req.params.roomId || 0);
+  const userId = Number(req.user.uid || 0);
+
+  if (!roomId) {
+    return res.status(400).json({ message: 'roomId不能为空' });
+  }
+
+  try {
+    const [rooms] = await pool.query('SELECT id, owner_user_id FROM game_rooms WHERE id = ? LIMIT 1', [roomId]);
+    if (rooms.length === 0) {
+      return res.status(404).json({ message: '房间不存在' });
+    }
+
+    const room = rooms[0];
+    if (Number(room.owner_user_id) !== userId) {
+      return res.status(403).json({ message: '仅房主可开始游戏' });
+    }
+
+    const roomState = getRoomState(roomId);
+    if (!roomState.started) {
+      roomState.started = true;
+      roomState.startedAt = new Date().toISOString();
+    }
+
+    broadcastRoomEvent(roomId, {
+      type: 'game-started',
+      roomId,
+      startedAt: roomState.startedAt,
+      startedBy: userId
+    });
+
+    return res.json({
+      message: '游戏已开始',
+      roomId,
+      startedAt: roomState.startedAt
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '开始游戏失败', detail: error.message });
   }
 });
 
