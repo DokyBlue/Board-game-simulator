@@ -84,6 +84,43 @@ async function broadcastRoomMembers(roomId) {
   });
 }
 
+async function getRoomInfo(roomId) {
+  const [rows] = await pool.query(
+    `SELECT id, code, game_key AS gameKey, owner_user_id AS ownerUserId, started_at AS startedAt
+     FROM game_rooms
+     WHERE id = ?
+     LIMIT 1`,
+    [roomId]
+  );
+
+  return rows[0] || null;
+}
+
+async function syncRoomState(roomId) {
+  const [members, room] = await Promise.all([getRoomMembers(roomId), getRoomInfo(roomId)]);
+  if (!room) {
+    return;
+  }
+
+  const roomState = getRoomState(roomId);
+  roomState.started = !!room.startedAt;
+  roomState.startedAt = room.startedAt ? new Date(room.startedAt).toISOString() : null;
+
+  broadcastRoomEvent(roomId, {
+    type: 'room-sync',
+    roomId: Number(roomId),
+    room: {
+      id: Number(room.id),
+      code: room.code,
+      gameKey: room.gameKey,
+      ownerUserId: Number(room.ownerUserId),
+      startedAt: roomState.startedAt,
+      gameStarted: roomState.started
+    },
+    members
+  });
+}
+
 function buildToken(user) {
   return jwt.sign({ uid: user.id, username: user.username }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN
@@ -283,7 +320,7 @@ app.post('/lobby/rooms/join', authRequired, async (req, res) => {
     }
 
     if (isNewMember) {
-      await broadcastRoomMembers(room.id);
+      await syncRoomState(room.id);
     }
 
     return res.json({
@@ -330,6 +367,52 @@ app.get('/lobby/rooms/:roomId/members', authRequired, async (req, res) => {
 });
 
 
+app.get('/lobby/rooms/:roomId/state', authRequired, async (req, res) => {
+  const roomId = Number(req.params.roomId || 0);
+  const userId = Number(req.user.uid || 0);
+
+  if (!roomId) {
+    return res.status(400).json({ message: 'roomId不能为空' });
+  }
+
+  try {
+    const [membershipRows] = await pool.query(
+      'SELECT id FROM room_members WHERE room_id = ? AND user_id = ? LIMIT 1',
+      [roomId, userId]
+    );
+
+    if (membershipRows.length === 0) {
+      return res.status(403).json({ message: '仅房间成员可查看房间状态' });
+    }
+
+    const [room, members] = await Promise.all([getRoomInfo(roomId), getRoomMembers(roomId)]);
+    if (!room) {
+      return res.status(404).json({ message: '房间不存在' });
+    }
+
+    const roomState = getRoomState(roomId);
+    roomState.started = !!room.startedAt;
+    roomState.startedAt = room.startedAt ? new Date(room.startedAt).toISOString() : null;
+
+    return res.json({
+      roomId,
+      room: {
+        id: Number(room.id),
+        code: room.code,
+        gameKey: room.gameKey,
+        ownerUserId: Number(room.ownerUserId),
+        startedAt: roomState.startedAt,
+        gameStarted: roomState.started
+      },
+      members,
+      gameStarted: roomState.started,
+      startedAt: roomState.startedAt
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '获取房间状态失败', detail: error.message });
+  }
+});
+
 app.post('/lobby/rooms/leave', authRequired, async (req, res) => {
   const roomId = Number(req.body.roomId || 0);
   const userId = req.user.uid;
@@ -361,7 +444,7 @@ app.post('/lobby/rooms/leave', authRequired, async (req, res) => {
       return res.json({ message: '房间无人，已自动销毁' });
     }
 
-    await broadcastRoomMembers(roomId);
+    await syncRoomState(roomId);
 
     return res.json({ message: '已退出房间' });
   } catch (error) {
@@ -454,14 +537,10 @@ app.post('/lobby/rooms/:roomId/start', authRequired, async (req, res) => {
     if (!roomState.started) {
       roomState.started = true;
       roomState.startedAt = new Date().toISOString();
+      await pool.query('UPDATE game_rooms SET started_at = ? WHERE id = ?', [roomState.startedAt, roomId]);
     }
 
-    broadcastRoomEvent(roomId, {
-      type: 'game-started',
-      roomId,
-      startedAt: roomState.startedAt,
-      startedBy: userId
-    });
+    await syncRoomState(roomId);
 
     return res.json({
       message: '游戏已开始',
