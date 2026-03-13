@@ -64,6 +64,9 @@ namespace BoardGameSimulator.Networking
                 request.SetRequestHeader("Content-Type", "application/json");
                 request.SetRequestHeader("Authorization", $"Bearer {token}");
 
+                request.certificateHandler = new BypassCertificate();
+                request.SetRequestHeader("ngrok-skip-browser-warning", "true");
+
                 yield return request.SendWebRequest();
 
                 if (request.result != UnityWebRequest.Result.Success)
@@ -154,6 +157,14 @@ namespace BoardGameSimulator.Networking
         private class ErrorResponse
         {
             public string message;
+        }
+    }
+
+    public class BypassCertificate : CertificateHandler
+    {
+        protected override bool ValidateCertificate(byte[] certificateData)
+        {
+            return true;
         }
     }
 
