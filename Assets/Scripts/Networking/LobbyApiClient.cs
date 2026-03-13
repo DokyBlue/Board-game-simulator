@@ -29,6 +29,61 @@ namespace BoardGameSimulator.Networking
             yield return Post("/lobby/rooms/leave", body, token, callback);
         }
 
+        public IEnumerator GetRoomState(long roomId, string token, Action<LobbyStateApiResult> callback)
+        {
+            using (var request = UnityWebRequest.Get($"{SessionContext.ServerBaseUrl}/lobby/rooms/{roomId}/state"))
+            {
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Authorization", $"Bearer {token}");
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    callback?.Invoke(new LobbyStateApiResult(false, request.error, null));
+                    yield break;
+                }
+
+                if (request.responseCode >= 400)
+                {
+                    callback?.Invoke(new LobbyStateApiResult(false, ParseError(request.downloadHandler.text), null));
+                    yield break;
+                }
+
+                var response = JsonUtility.FromJson<LobbyStateResponse>(request.downloadHandler.text);
+                callback?.Invoke(new LobbyStateApiResult(true, "ok", response));
+            }
+        }
+
+        public IEnumerator StartGame(long roomId, string token, Action<LobbyStartApiResult> callback)
+        {
+            var body = "{}";
+            using (var request = new UnityWebRequest($"{SessionContext.ServerBaseUrl}/lobby/rooms/{roomId}/start", UnityWebRequest.kHttpVerbPOST))
+            {
+                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                request.SetRequestHeader("Authorization", $"Bearer {token}");
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    callback?.Invoke(new LobbyStartApiResult(false, request.error, null));
+                    yield break;
+                }
+
+                if (request.responseCode >= 400)
+                {
+                    callback?.Invoke(new LobbyStartApiResult(false, ParseError(request.downloadHandler.text), null));
+                    yield break;
+                }
+
+                var response = JsonUtility.FromJson<LobbyStartResponse>(request.downloadHandler.text);
+                callback?.Invoke(new LobbyStartApiResult(true, "ok", response));
+            }
+        }
+
         public IEnumerator GetRoomMembers(long roomId, string token, Action<LobbyMembersApiResult> callback)
         {
             using (var request = UnityWebRequest.Get($"{SessionContext.ServerBaseUrl}/lobby/rooms/{roomId}/members"))
@@ -154,6 +209,24 @@ namespace BoardGameSimulator.Networking
         }
 
         [Serializable]
+        public class LobbyStateResponse
+        {
+            public long roomId;
+            public LobbyRoom room;
+            public LobbyMember[] members;
+            public bool gameStarted;
+            public string startedAt;
+        }
+
+        [Serializable]
+        public class LobbyStartResponse
+        {
+            public string message;
+            public long roomId;
+            public string startedAt;
+        }
+
+        [Serializable]
         private class ErrorResponse
         {
             public string message;
@@ -195,4 +268,34 @@ namespace BoardGameSimulator.Networking
             Response = response;
         }
     }
+
+
+    public class LobbyStateApiResult
+    {
+        public readonly bool Success;
+        public readonly string Message;
+        public readonly LobbyApiClient.LobbyStateResponse Response;
+
+        public LobbyStateApiResult(bool success, string message, LobbyApiClient.LobbyStateResponse response)
+        {
+            Success = success;
+            Message = message;
+            Response = response;
+        }
+    }
+
+    public class LobbyStartApiResult
+    {
+        public readonly bool Success;
+        public readonly string Message;
+        public readonly LobbyApiClient.LobbyStartResponse Response;
+
+        public LobbyStartApiResult(bool success, string message, LobbyApiClient.LobbyStartResponse response)
+        {
+            Success = success;
+            Message = message;
+            Response = response;
+        }
+    }
+
 }
