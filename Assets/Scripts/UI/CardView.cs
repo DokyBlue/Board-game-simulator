@@ -24,6 +24,12 @@ namespace BoardGameSimulator.UI
         public void SetCard(PokerCard card, bool faceUp)
         {
             _image.sprite = faceUp ? spriteLibrary.GetFront(card) : spriteLibrary.GetBack();
+            _image.enabled = true;
+        }
+
+        public void HideCard()
+        {
+            _image.enabled = false;
         }
     }
 }

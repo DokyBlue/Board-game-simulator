@@ -74,6 +74,7 @@ namespace BoardGameSimulator.Poker
         private PlayerActionType _playerAction = PlayerActionType.None;
         private readonly Dictionary<string, string> _lastActions = new Dictionary<string, string>();
         private readonly Dictionary<string, BotStyle> _botStyles = new Dictionary<string, BotStyle>();
+        private bool _isShowdownRevealed;
         private readonly List<string> _actionHistory = new List<string>();
         private const int MaxHistoryEntries = 160;
         private const int MaxRoomPlayers = 6;
@@ -180,6 +181,7 @@ namespace BoardGameSimulator.Poker
         private IEnumerator RoundLoop()
         {
             _waitingForRoundChoice = false;
+            _isShowdownRevealed = false;
             ToggleRoundChoiceButtons(false);
             SetActionButtons(false);
             PrepareRound();
@@ -218,6 +220,7 @@ namespace BoardGameSimulator.Poker
             ClearAllSeatHighlights();
             _pot = 0;
             _communityCards.Clear();
+            HideCommunityCards();
             _deck = new PokerDeck();
             _deck.Shuffle();
             _lastActions.Clear();
@@ -690,6 +693,7 @@ namespace BoardGameSimulator.Poker
             {
                 survivors[0].Chips += _pot;
                 RecordAction(survivors[0].Name, "Winner");
+                _isShowdownRevealed = false;
                 stateText.text = $"{survivors[0].Name} 因其他玩家弃牌获胜，赢得底池 {_pot}";
                 _dealerIndex = NextSeatWithChips(_dealerIndex);
                 return;
@@ -704,9 +708,11 @@ namespace BoardGameSimulator.Poker
                 .OrderByDescending(x => x.Hand)
                 .First();
 
+            _isShowdownRevealed = true;
             result.Player.Chips += _pot;
             RecordAction(result.Player.Name, "Winner");
-            stateText.text = $"赢家：{result.Player.Name}，牌型：{result.Hand.Rank}，底池：{_pot}";
+            var winnerHoleCards = string.Join(" ", result.Player.HoleCards.Select(card => card.ToString()));
+            stateText.text = $"赢家：{result.Player.Name}，手牌：{winnerHoleCards}，牌型：{result.Hand.Rank}，底池：{_pot}";
             _dealerIndex = NextSeatWithChips(_dealerIndex);
         }
 
@@ -825,6 +831,23 @@ namespace BoardGameSimulator.Poker
             }
         }
 
+
+        private void HideCommunityCards()
+        {
+            if (boardCardViews == null)
+            {
+                return;
+            }
+
+            foreach (var cardView in boardCardViews)
+            {
+                if (cardView != null)
+                {
+                    cardView.HideCard();
+                }
+            }
+        }
+
         private void RenderCards()
         {
             if (playerCardViews.Count >= 2 && _players[0].HoleCards.Count >= 2)
@@ -837,7 +860,12 @@ namespace BoardGameSimulator.Poker
             {
                 if (i < _communityCards.Count)
                 {
-                    boardCardViews[i].SetCard(_communityCards[i], true);
+                    var revealCard = _isShowdownRevealed || i < _communityCards.Count;
+                    boardCardViews[i].SetCard(_communityCards[i], revealCard);
+                }
+                else
+                {
+                    boardCardViews[i].HideCard();
                 }
             }
         }
