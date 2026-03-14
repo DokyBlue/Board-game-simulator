@@ -25,7 +25,7 @@ namespace BoardGameSimulator.Networking
     public class TcpNetworkManager : MonoBehaviour
     {
 
-        // --- 单例模式 ---
+        // --- 鍗曚緥妯″紡 ---
         public static TcpNetworkManager Instance { get; private set; }
 
         private void Awake()
@@ -36,7 +36,7 @@ namespace BoardGameSimulator.Networking
                 return;
             }
             Instance = this;
-            DontDestroyOnLoad(this.gameObject); // 保证切换场景时网络不断开
+            DontDestroyOnLoad(this.gameObject); // 淇濊瘉鍒囨崲鍦烘櫙鏃剁綉缁滀笉鏂紑
         }
 
         private const int HeaderLength = 8;
@@ -131,7 +131,8 @@ namespace BoardGameSimulator.Networking
             }
 
             var bodyBytes = Encoding.UTF8.GetBytes(jsonBody ?? string.Empty);
-            var pkgLen = bodyBytes.Length;
+            var bodyLen = bodyBytes.Length;
+            var pkgLen = HeaderLength + bodyLen;
 
             var header = new byte[HeaderLength];
             var pkgLenNet = IPAddress.HostToNetworkOrder(pkgLen);
@@ -140,11 +141,11 @@ namespace BoardGameSimulator.Networking
             Buffer.BlockCopy(BitConverter.GetBytes(pkgLenNet), 0, header, 0, 4);
             Buffer.BlockCopy(BitConverter.GetBytes(msgCodeNet), 0, header, 4, 4);
 
-            var packetBytes = new byte[HeaderLength + pkgLen];
+            var packetBytes = new byte[pkgLen];
             Buffer.BlockCopy(header, 0, packetBytes, 0, HeaderLength);
-            if (pkgLen > 0)
+            if (bodyLen > 0)
             {
-                Buffer.BlockCopy(bodyBytes, 0, packetBytes, HeaderLength, pkgLen);
+                Buffer.BlockCopy(bodyBytes, 0, packetBytes, HeaderLength, bodyLen);
             }
 
             lock (sendLock)
@@ -196,13 +197,14 @@ namespace BoardGameSimulator.Networking
                     var pkgLen = IPAddress.NetworkToHostOrder(BitConverter.ToInt32(header, 0));
                     var msgCodeInt = IPAddress.NetworkToHostOrder(BitConverter.ToInt32(header, 4));
 
-                    if (pkgLen < 0)
+                    if (pkgLen < HeaderLength)
                     {
                         Debug.LogError($"TCP receive invalid package length: {pkgLen}");
                         break;
                     }
 
-                    var bodyBytes = pkgLen == 0 ? Array.Empty<byte>() : ReadExact(pkgLen, cancellation.Token);
+                    var bodyLen = pkgLen - HeaderLength;
+                    var bodyBytes = bodyLen == 0 ? Array.Empty<byte>() : ReadExact(bodyLen, cancellation.Token);
                     if (bodyBytes == null)
                     {
                         break;
