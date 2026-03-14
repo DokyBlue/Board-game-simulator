@@ -21,7 +21,6 @@
 #include "ngx_func.h"
 //#include "ngx_c_socket.h"
 #include "ngx_c_memory.h"
-#include "ngx_c_crc32.h"
 #include "ngx_c_slogic.h"  
 #include "ngx_logiccomm.h"  
 #include "ngx_c_lockmutex.h"  
@@ -78,36 +77,20 @@ void CLogicSocket::threadRecvProcFunc(char *pMsgBuf)
     LPSTRUC_MSG_HEADER pMsgHeader = (LPSTRUC_MSG_HEADER)pMsgBuf;                  //消息头
     LPCOMM_PKG_HEADER  pPkgHeader = (LPCOMM_PKG_HEADER)(pMsgBuf+m_iLenMsgHeader); //包头
     void  *pPkgBody;                                                              //指向包体的指针
-    unsigned short pkglen = ntohs(pPkgHeader->pkgLen);                            //客户端指明的包宽度【包头+包体】
+    uint32_t pkglen = pPkgHeader->pkgLen;                            //客户端指明的包宽度【包头+包体】
 
     if(m_iLenPkgHeader == pkglen)
     {
         //没有包体，只有包头
-		if(pPkgHeader->crc32 != 0) //只有包头的crc值给0
-		{
-			return; //crc错，直接丢弃
-		}
 		pPkgBody = NULL;
     }
     else 
 	{
         //有包体，走到这里
-		pPkgHeader->crc32 = ntohl(pPkgHeader->crc32);		          //针对4字节的数据，网络序转主机序
 		pPkgBody = (void *)(pMsgBuf+m_iLenMsgHeader+m_iLenPkgHeader); //跳过消息头 以及 包头 ，指向包体
-
-		int calccrc = CCRC32::GetInstance()->Get_CRC((unsigned char *)pPkgBody,pkglen-m_iLenPkgHeader); //计算纯包体的crc值
-		if(calccrc != pPkgHeader->crc32) //服务器端根据包体计算crc值，和客户端传递过来的包头中的crc32信息比较
-		{
-            ngx_log_stderr(0,"CLogicSocket::threadRecvProcFunc()中CRC错误[服务器:%d/客户端:%d]，丢弃数据!",calccrc,pPkgHeader->crc32);    //正式代码中可以干掉这个信息
-			return; //crc错，直接丢弃
-		}
-        else
-        {
-            //ngx_log_stderr(0,"CLogicSocket::threadRecvProcFunc()中CRC正确[服务器:%d/客户端:%d]，不错!",calccrc,pPkgHeader->crc32);
-        }        
 	}
 
-    unsigned short imsgCode = ntohs(pPkgHeader->msgCode); //消息代码拿出来
+    uint32_t imsgCode = pPkgHeader->msgCode; //消息代码拿出来
     lpngx_connection_t p_Conn = pMsgHeader->pConn;        //消息头中藏着连接池中连接的指针
 
     if(p_Conn->iCurrsequence != pMsgHeader->iCurrsequence)   
@@ -172,9 +155,8 @@ void CLogicSocket::SendNoBodyPkgToClient(LPSTRUC_MSG_HEADER pMsgHeader,unsigned 
 	p_tmpbuf += m_iLenMsgHeader;
 
     LPCOMM_PKG_HEADER pPkgHeader = (LPCOMM_PKG_HEADER)p_tmpbuf;	  //指向的是我要发送出去的包的包头	
-    pPkgHeader->msgCode = htons(iMsgCode);	
-    pPkgHeader->pkgLen = htons(m_iLenPkgHeader); 
-	pPkgHeader->crc32 = 0;		
+    pPkgHeader->msgCode = iMsgCode;
+    pPkgHeader->pkgLen = m_iLenPkgHeader;
     msgSend(p_sendbuf);
     return;
 }
@@ -214,7 +196,6 @@ bool CLogicSocket::_HandleRegister(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
     //LPSTRUCT_REGISTER pFromPkgHeader =  (LPSTRUCT_REGISTER)(((char *)pMsgHeader)+m_iLenMsgHeader);	//指向收到的包的包头，其中数据后续可能要用到
 	LPCOMM_PKG_HEADER pPkgHeader;	
 	CMemory  *p_memory = CMemory::GetInstance();
-	CCRC32   *p_crc32 = CCRC32::GetInstance();
     int iSendLen = sizeof(STRUCT_REGISTER);  
     //a)分配要发送出去的包的内存
 
@@ -224,17 +205,12 @@ bool CLogicSocket::_HandleRegister(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
     //c)填充包头
     pPkgHeader = (LPCOMM_PKG_HEADER)(p_sendbuf+m_iLenMsgHeader);    //指向包头
     pPkgHeader->msgCode = _CMD_REGISTER;	                        //消息代码，可以统一在ngx_logiccomm.h中定义
-    pPkgHeader->msgCode = htons(pPkgHeader->msgCode);	            //htons主机序转网络序 
-    pPkgHeader->pkgLen  = htons(m_iLenPkgHeader + iSendLen);        //整个包的尺寸【包头+包体尺寸】 
+    pPkgHeader->pkgLen  = m_iLenPkgHeader + iSendLen;        //整个包的尺寸【包头+包体尺寸】 
     //d)填充包体
     LPSTRUCT_REGISTER p_sendInfo = (LPSTRUCT_REGISTER)(p_sendbuf+m_iLenMsgHeader+m_iLenPkgHeader);	//跳过消息头，跳过包头，就是包体了
     //。。。。。这里根据需要，填充要发回给客户端的内容,int类型要使用htonl()转，short类型要使用htons()转；
     
-    //e)包体内容全部确定好后，计算包体的crc32值
-    pPkgHeader->crc32   = p_crc32->Get_CRC((unsigned char *)p_sendInfo,iSendLen);
-    pPkgHeader->crc32   = htonl(pPkgHeader->crc32);		
-
-    //f)发送数据包
+    //e)发送数据包
     msgSend(p_sendbuf);
   
     return true;
@@ -258,18 +234,14 @@ bool CLogicSocket::_HandleLogIn(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsg
 
 	LPCOMM_PKG_HEADER pPkgHeader;	
 	CMemory  *p_memory = CMemory::GetInstance();
-	CCRC32   *p_crc32 = CCRC32::GetInstance();
 
     int iSendLen = sizeof(STRUCT_LOGIN);  
     char *p_sendbuf = (char *)p_memory->AllocMemory(m_iLenMsgHeader+m_iLenPkgHeader+iSendLen,false);    
     memcpy(p_sendbuf,pMsgHeader,m_iLenMsgHeader);    
     pPkgHeader = (LPCOMM_PKG_HEADER)(p_sendbuf+m_iLenMsgHeader);
     pPkgHeader->msgCode = _CMD_LOGIN;
-    pPkgHeader->msgCode = htons(pPkgHeader->msgCode);
-    pPkgHeader->pkgLen  = htons(m_iLenPkgHeader + iSendLen);    
+    pPkgHeader->pkgLen  = m_iLenPkgHeader + iSendLen;    
     LPSTRUCT_LOGIN p_sendInfo = (LPSTRUCT_LOGIN)(p_sendbuf+m_iLenMsgHeader+m_iLenPkgHeader);
-    pPkgHeader->crc32   = p_crc32->Get_CRC((unsigned char *)p_sendInfo,iSendLen);
-    pPkgHeader->crc32   = htonl(pPkgHeader->crc32);		   
     //ngx_log_stderr(0,"成功收到了登录并返回结果！");
     msgSend(p_sendbuf);
     return true;
