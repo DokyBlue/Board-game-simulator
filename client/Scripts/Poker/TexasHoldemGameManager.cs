@@ -41,6 +41,7 @@ namespace BoardGameSimulator.Poker
         public bool isFolded;
         public bool isAllIn;
         public string lastAction;
+        public bool isBot;
         public ServerCard[] holeCards;
     }
 
@@ -93,7 +94,7 @@ namespace BoardGameSimulator.Poker
         [SerializeField] private TMP_Text historyText;
         [SerializeField] private ActionPromptView promptView;
         [SerializeField] private ChipAnimator chipAnimator;
-        //[SerializeField] private LobbyApiClient lobbyApiClient;
+        [SerializeField] private LobbyApiClient lobbyApiClient;
 
         [Header("Scene")]
         [SerializeField] private string gameSelectionScene = "GameSelection";
@@ -313,7 +314,6 @@ namespace BoardGameSimulator.Poker
                 {
                     tableMaxBet = Mathf.Max(tableMaxBet, state.players[i].currentBet);
                 }
-                return;
             }
 
             bool foundLocalPlayer = false;
@@ -364,7 +364,7 @@ namespace BoardGameSimulator.Poker
                 if (playerSeatViews != null && i < playerSeatViews.Count && playerSeatViews[i] != null)
                 {
                     playerSeatViews[i].SetHighlight(isMyTurn);
-                    var vp = new PokerPlayer(sp.username, sp.chips, !isLocalPlayer)
+                    var vp = new PokerPlayer(sp.username, sp.chips, sp.isBot || !isLocalPlayer)
                     {
                         CurrentBet = sp.currentBet,
                         IsFolded = sp.isFolded,
@@ -1542,6 +1542,13 @@ namespace BoardGameSimulator.Poker
                 // 发送退出指令给 C++ (MsgCode: 2003)
                 TcpNetworkManager.Instance.SendMessage(2003, "{}");
             }
+
+            if (SessionContext.CurrentRoomId > 0 && lobbyApiClient != null)
+            {
+                StartCoroutine(LeaveRoomCoroutine());
+                return;
+            }
+
             SessionContext.ClearRoom();
             UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
         }
@@ -1564,26 +1571,29 @@ namespace BoardGameSimulator.Poker
             StartCoroutine(RoundLoop());
         }
 
-        //private IEnumerator LeaveRoomCoroutine()
-        //{
-        //    var done = false;
-        //    StartCoroutine(lobbyApiClient.LeaveRoom(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-        //    {
-        //        done = true;
-        //        if (!result.Success)
-        //        {
-        //            Debug.LogWarning($"退出房间失败：{result.Message}");
-        //        }
-        //    }));
+        private IEnumerator LeaveRoomCoroutine()
+        {
+            var done = false;
+            long roomId = SessionContext.CurrentRoomId;
+            string token = SessionContext.AccessToken;
 
-        //    while (!done)
-        //    {
-        //        yield return null;
-        //    }
+            StartCoroutine(lobbyApiClient.LeaveRoom(roomId, token, result =>
+            {
+                done = true;
+                if (!result.Success)
+                {
+                    Debug.LogWarning($"退出房间失败：{result.Message}");
+                }
+            }));
 
-        //    SessionContext.ClearRoom();
-        //    UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
-        //}
+            while (!done)
+            {
+                yield return null;
+            }
+
+            SessionContext.ClearRoom();
+            UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
+        }
 
         private void RenderRoomInfo()
         {
