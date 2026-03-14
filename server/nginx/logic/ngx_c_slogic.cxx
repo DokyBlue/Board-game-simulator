@@ -755,10 +755,10 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
             room->bots[i].state.isAllIn = false;
             room->bots[i].state.lastAction = "Waiting";
             room->bots[i].holeCards.clear();
-            room->bots[i].holeCards.push_back(deck.back());
-            deck.pop_back();
-            room->bots[i].holeCards.push_back(deck.back());
-            deck.pop_back();
+            room->bots[i].holeCards.push_back(room->deck.back());
+            room->deck.pop_back();
+            room->bots[i].holeCards.push_back(room->deck.back());
+            room->deck.pop_back();
         }
 
         if(!room->players.empty() && room->players[0] != NULL)
