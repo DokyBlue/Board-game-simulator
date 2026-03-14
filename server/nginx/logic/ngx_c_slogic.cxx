@@ -137,6 +137,7 @@ bool CLogicSocket::Initialize()
     m_statusHandler[1001] = &CLogicSocket::_HandleJoinRoom;
     m_statusHandler[2002] = &CLogicSocket::_HandleStartGame;
     m_statusHandler[2001] = &CLogicSocket::_HandleGameAction;
+    m_statusHandler[2004] = &CLogicSocket::_HandleResetChips;
 
     bool bParentInit = CSocekt::Initialize();  //调用父类的同名函数
     return bParentInit;
@@ -371,6 +372,11 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
         if(std::find(room->players.begin(),room->players.end(),pConn) == room->players.end())
         {
             room->players.push_back(pConn);
+
+            if(room->owner == NULL)
+            {
+                room->owner = pConn;
+            }
         }
 
         room->playerStates[pConn] = GameRoom::PlayerState();
@@ -561,9 +567,12 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
 
     {
         std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
-        if(room->isPlaying)
+        if(room->owner != pConn)
         {
-            return true;
+            // 非房主无权开局，仍广播当前状态以保持客户端同步
+            roomLock.unlock();
+            BroadcastGameState(roomId,room);
+            return false;
         }
 
         std::vector<std::string> deck = GenerateShuffledDeck();
@@ -608,6 +617,66 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
         {
             room->currentTurnUserId = 0;
         }
+    }
+
+    BroadcastGameState(roomId,room);
+    return true;
+}
+
+bool CLogicSocket::_HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength)
+{
+    (void)pMsgHeader;
+    (void)pPkgBody;
+    (void)iBodyLength;
+
+    uint32_t roomId = 0;
+    {
+        std::shared_lock<std::shared_mutex> roomMapReadLock(m_roomMapMutex);
+        std::unordered_map<lpngx_connection_t,uint32_t>::const_iterator connIt = m_connRoomMap.find(pConn);
+        if(connIt == m_connRoomMap.end())
+        {
+            return false;
+        }
+        roomId = connIt->second;
+    }
+
+    std::shared_ptr<GameRoom> room;
+    {
+        std::shared_lock<std::shared_mutex> roomMapReadLock(m_roomMapMutex);
+        std::unordered_map<uint32_t,std::shared_ptr<GameRoom>>::const_iterator roomIt = m_gameRooms.find(roomId);
+        if(roomIt == m_gameRooms.end())
+        {
+            return false;
+        }
+        room = roomIt->second;
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
+        if(room->owner != pConn)
+        {
+            // 非房主无权重置筹码，仍广播当前状态以保持客户端同步
+            roomLock.unlock();
+            BroadcastGameState(roomId,room);
+            return false;
+        }
+
+        for(std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.begin(); it != room->playerStates.end(); ++it)
+        {
+            it->second.chips = 2000;
+            it->second.currentBet = 0;
+            it->second.isFolded = false;
+            it->second.isAllIn = false;
+            it->second.lastAction = "Waiting";
+        }
+
+        room->pot = 0;
+        room->maxBet = 0;
+        room->stage = "Preflop";
+        room->communityCards.clear();
+        room->holeCards.clear();
+        room->isPlaying = false;
+        room->currentTurnUserId = 0;
     }
 
     BroadcastGameState(roomId,room);
