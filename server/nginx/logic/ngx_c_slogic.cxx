@@ -663,6 +663,7 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
         }
 
         AdvanceTurn(room,GetPlayerUserId(room,pConn));
+        CheckAndAdvanceStage(room);
     }
 
     BroadcastGameState(roomId,room);
@@ -1456,6 +1457,7 @@ void CLogicSocket::RunBotTurns(uint32_t roomId,const std::shared_ptr<GameRoom> &
                 }
 
                 AdvanceTurn(room,bot.userId);
+                CheckAndAdvanceStage(room);
                 acted = true;
                 break;
             }
