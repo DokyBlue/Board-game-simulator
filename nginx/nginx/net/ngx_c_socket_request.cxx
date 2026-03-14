@@ -162,10 +162,10 @@ void CSocekt::ngx_wait_request_handler_proc_p1(lpngx_connection_t pConn,bool &is
     LPCOMM_PKG_HEADER pPkgHeader;
     pPkgHeader = (LPCOMM_PKG_HEADER)pConn->dataHeadInfo; //正好收到包头时，包头信息肯定是在dataHeadInfo里；
 
-    pPkgHeader->pkgLen = ntohl(pPkgHeader->pkgLen);
-    pPkgHeader->msgCode = ntohl(pPkgHeader->msgCode);
-    uint32_t e_pkgLen = pPkgHeader->pkgLen;  //8字节包头(4字节长度+4字节消息码)收到后统一做网络序转主机序
-
+    unsigned short e_pkgLen; 
+    e_pkgLen = ntohs(pPkgHeader->pkgLen);  //注意这里网络序转本机序，所有传输到网络上的2字节数据，都要用htons()转成网络序，所有从网络上收到的2字节数据，都要用ntohs()转成本机序
+                                                //ntohs/htons的目的就是保证不同操作系统数据之间收发的正确性，【不管客户端/服务器是什么操作系统，发送的数字是多少，收到的就是多少】
+                                                //不明白的同学，直接百度搜索"网络字节序" "主机字节序" "c++ 大端" "c++ 小端"
     //恶意包或者错误包的判断
     if(e_pkgLen < m_iLenPkgHeader) 
     {
