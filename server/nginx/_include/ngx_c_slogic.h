@@ -97,7 +97,6 @@ private:
 	void FillBotsForRoom(uint32_t roomId,const std::shared_ptr<GameRoom> &room);
 	void AdvanceTurn(const std::shared_ptr<GameRoom> &room,uint64_t currentUserId);
 	void RunBotTurns(uint32_t roomId,const std::shared_ptr<GameRoom> &room);
-	void CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room);
 
 private:
 	std::unordered_map<uint32_t,std::shared_ptr<GameRoom>> m_gameRooms;
