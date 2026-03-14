@@ -14,6 +14,7 @@
 #include <pthread.h>   //多线程
 
 #include <algorithm>
+#include <random>
 #include <sstream>
 #include <mutex>
 
@@ -100,6 +101,28 @@ bool ExtractJsonUint(const std::string &json,const char *key,uint32_t &value)
 }
 } // namespace
 
+std::vector<std::string> GenerateShuffledDeck()
+{
+    static const char *suits[] = {"Hearts","Diamonds","Clubs","Spades"};
+    static const char *ranks[] = {"2","3","4","5","6","7","8","9","T","J","Q","K","A"};
+
+    std::vector<std::string> deck;
+    deck.reserve(52);
+
+    for(std::size_t i = 0; i < sizeof(suits) / sizeof(suits[0]); ++i)
+    {
+        for(std::size_t j = 0; j < sizeof(ranks) / sizeof(ranks[0]); ++j)
+        {
+            deck.push_back(std::string(ranks[j]) + suits[i]);
+        }
+    }
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(deck.begin(),deck.end(),g);
+    return deck;
+}
+
 //构造函数
 CLogicSocket::CLogicSocket()
 {
@@ -124,6 +147,7 @@ bool CLogicSocket::Initialize()
 
     //新增德州扑克相关命令
     m_statusHandler[1001] = &CLogicSocket::_HandleJoinRoom;
+    m_statusHandler[2002] = &CLogicSocket::_HandleStartGame;
     m_statusHandler[2001] = &CLogicSocket::_HandleGameAction;
 
     bool bParentInit = CSocekt::Initialize();  //调用父类的同名函数
@@ -395,8 +419,6 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
     std::string action;
     ExtractJsonString(body,"action",action);
 
-    std::vector<lpngx_connection_t> playersSnapshot;
-    std::string roomStateJson;
     {
         std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
 
@@ -405,20 +427,116 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
             uint32_t amount = 0;
             if(ExtractJsonUint(body,"amount",amount))
             {
-                room->potSize += amount;
+                room->pot += amount;
             }
             else
             {
-                room->potSize += 10;
+                room->pot += 10;
             }
         }
         else if(action == "fold" || action == "FOLD")
         {
             room->players.erase(std::remove(room->players.begin(),room->players.end(),pConn),room->players.end());
+            room->holeCards.erase(pConn);
+        }
+    }
+
+    BroadcastGameState(roomId,room);
+
+    (void)pMsgHeader;
+    return true;
+}
+
+bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength)
+{
+    (void)pMsgHeader;
+    (void)pPkgBody;
+    (void)iBodyLength;
+
+    uint32_t roomId = 0;
+    {
+        std::shared_lock<std::shared_mutex> roomMapReadLock(m_roomMapMutex);
+        std::unordered_map<lpngx_connection_t,uint32_t>::const_iterator connIt = m_connRoomMap.find(pConn);
+        if(connIt == m_connRoomMap.end())
+        {
+            return false;
+        }
+        roomId = connIt->second;
+    }
+
+    std::shared_ptr<GameRoom> room;
+    {
+        std::shared_lock<std::shared_mutex> roomMapReadLock(m_roomMapMutex);
+        std::unordered_map<uint32_t,std::shared_ptr<GameRoom>>::const_iterator roomIt = m_gameRooms.find(roomId);
+        if(roomIt == m_gameRooms.end())
+        {
+            return false;
+        }
+        room = roomIt->second;
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
+        if(room->isPlaying)
+        {
+            return true;
         }
 
+        std::vector<std::string> deck = GenerateShuffledDeck();
+
+        room->isPlaying = true;
+        room->pot = 0;
+        room->stage = "Preflop";
+        room->communityCards.clear();
+        room->holeCards.clear();
+
+        for(std::size_t i = 0; i < room->players.size(); ++i)
+        {
+            lpngx_connection_t playerConn = room->players[i];
+            if(playerConn == NULL || deck.size() < 2)
+            {
+                continue;
+            }
+
+            std::vector<std::string> cards;
+            cards.push_back(deck.back());
+            deck.pop_back();
+            cards.push_back(deck.back());
+            deck.pop_back();
+
+            room->holeCards[playerConn] = cards;
+        }
+
+        if(!room->players.empty() && room->players[0] != NULL)
+        {
+            room->currentTurnUserId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(room->players[0]));
+        }
+        else
+        {
+            room->currentTurnUserId = 0;
+        }
+    }
+
+    BroadcastGameState(roomId,room);
+    return true;
+}
+
+void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<GameRoom> &room)
+{
+    std::vector<lpngx_connection_t> playersSnapshot;
+    std::string roomStateJson;
+
+    {
+        std::shared_lock<std::shared_mutex> roomLock(room->roomMutex);
+
         std::ostringstream oss;
-        oss << "{\"roomId\":" << roomId << ",\"pot\":" << room->potSize << ",\"playerCount\":" << room->players.size() << ",\"communityCards\":[";
+        oss << "{\"roomId\":" << roomId
+            << ",\"pot\":" << room->pot
+            << ",\"playerCount\":" << room->players.size()
+            << ",\"stage\":\"" << room->stage << "\""
+            << ",\"currentTurnUserId\":" << room->currentTurnUserId
+            << ",\"communityCards\":[";
+
         for(std::size_t i = 0; i < room->communityCards.size(); ++i)
         {
             if(i != 0)
@@ -427,9 +545,30 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
             }
             oss << "\"" << room->communityCards[i] << "\"";
         }
-        oss << "]}";
-        roomStateJson = oss.str();
+        oss << "],\"holeCards\":{";
 
+        bool firstPlayer = true;
+        for(std::unordered_map<lpngx_connection_t,std::vector<std::string>>::const_iterator it = room->holeCards.begin(); it != room->holeCards.end(); ++it)
+        {
+            if(!firstPlayer)
+            {
+                oss << ",";
+            }
+            firstPlayer = false;
+            oss << "\"" << reinterpret_cast<uintptr_t>(it->first) << "\":[";
+            for(std::size_t i = 0; i < it->second.size(); ++i)
+            {
+                if(i != 0)
+                {
+                    oss << ",";
+                }
+                oss << "\"" << it->second[i] << "\"";
+            }
+            oss << "]";
+        }
+        oss << "}}";
+
+        roomStateJson = oss.str();
         playersSnapshot = room->players;
     }
 
@@ -446,7 +585,4 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
         msgHeader.iCurrsequence = playerConn->iCurrsequence;
         SendJsonPkgToClient(&msgHeader,3001,roomStateJson);
     }
-
-    (void)pMsgHeader;
-    return true;
 }
