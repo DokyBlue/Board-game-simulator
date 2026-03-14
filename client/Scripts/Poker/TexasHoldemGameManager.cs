@@ -211,16 +211,28 @@ namespace BoardGameSimulator.Poker
 
         private void OnNetworkPacket(uint msgCode, string body)
         {
+            if (msgCode != 3001)
+            {
+                return;
+            }
+
             try
             {
-                if (msgCode == 3001) // 收到 C++ 推送的牌桌同步数据
+                if (string.IsNullOrWhiteSpace(body))
                 {
-                    var serverState = JsonUtility.FromJson<ServerGameState>(body);
-                    _isWaitingForHostStart = false;
-                    ToggleRoundChoiceButtons(false);
-                    if (stateText != null) stateText.text = "游戏进行中...";
-                    RenderServerState(serverState);
+                    Debug.LogWarning("[TCP] 收到空的 3001 包体，忽略。");
+                    return;
                 }
+
+                ServerGameState serverState = JsonUtility.FromJson<ServerGameState>(body);
+                _isWaitingForHostStart = false;
+                ToggleRoundChoiceButtons(false);
+                if (stateText != null)
+                {
+                    stateText.text = "游戏进行中...";
+                }
+
+                RenderServerState(serverState);
             }
             catch (Exception e)
             {
@@ -230,70 +242,149 @@ namespace BoardGameSimulator.Poker
 
         private void RenderServerState(ServerGameState state)
         {
-            if (state == null || state.players == null) return;
+            if (state == null)
+            {
+                return;
+            }
 
-            // 1. 更新底池
+            // 1. 更新底池 + 动画
             if (_pot != state.pot)
             {
-                if (chipAnimator != null) chipAnimator.AnimatePot(_pot, state.pot);
+                if (chipAnimator != null)
+                {
+                    chipAnimator.AnimatePot(_pot, state.pot);
+                }
+
                 _pot = state.pot;
             }
 
-            boardText.text = $"{state.stage} | 底池: {_pot}";
+            if (boardText != null)
+            {
+                boardText.text = $"{state.stage} | 底池: {_pot}";
+            }
 
             // 2. 更新公共牌
-            for (int i = 0; i < boardCardViews.Count; i++)
+            if (boardCardViews != null)
             {
-                if (state.communityCards != null && i < state.communityCards.Length)
+                for (int i = 0; i < boardCardViews.Count; i++)
                 {
-                    var sc = state.communityCards[i];
-                    var card = new PokerCard { Suit = ParseSuit(sc.suit), Rank = ParseRank(sc.rank) };
-                    boardCardViews[i].SetCard(card, true);
-                }
-                else
-                {
-                    boardCardViews[i].HideCard();
+                    if (boardCardViews[i] == null)
+                    {
+                        continue;
+                    }
+
+                    if (state.communityCards != null && i < state.communityCards.Length && state.communityCards[i] != null)
+                    {
+                        var sc = state.communityCards[i];
+                        var card = new PokerCard { Suit = ParseSuit(sc.suit), Rank = ParseRank(sc.rank) };
+                        boardCardViews[i].SetCard(card, true);
+                    }
+                    else
+                    {
+                        boardCardViews[i].HideCard();
+                    }
                 }
             }
 
-            // 3. 更新玩家座位与手牌
+            // 安全兜底：等人阶段可能还没有 players 数组
+            if (state.players == null)
+            {
+                SetActionButtons(false);
+                if (playersText != null)
+                {
+                    playersText.text = "等待玩家加入...";
+                }
+                return;
+            }
+
+            // 3. 先计算公共回合信息（是否轮到我、是否可以 check）
+            int tableMaxBet = 0;
             for (int i = 0; i < state.players.Length; i++)
             {
-                var sp = state.players[i];
-
-                // 处理本地玩家自己的视角
-                if (sp.userId == SessionContext.UserId)
+                if (state.players[i] != null)
                 {
-                    bool isMyTurn = (state.currentTurnUserId == sp.userId);
-                    if (isMyTurn && !sp.isFolded && !sp.isAllIn)
+                    tableMaxBet = Mathf.Max(tableMaxBet, state.players[i].currentBet);
+                }
+            }
+
+            bool foundLocalPlayer = false;
+            bool myTurnAndCanAct = false;
+            bool canCheck = false;
+            List<string> playerSummary = new List<string>();
+
+            // 4. 渲染玩家座位、动作、本人手牌
+            for (int i = 0; i < state.players.Length; i++)
+            {
+                ServerPlayer sp = state.players[i];
+                if (sp == null)
+                {
+                    continue;
+                }
+
+                bool isLocalPlayer = sp.userId == SessionContext.UserId;
+                bool isMyTurn = state.currentTurnUserId == sp.userId;
+
+                if (isLocalPlayer)
+                {
+                    foundLocalPlayer = true;
+                    myTurnAndCanAct = isMyTurn && !sp.isFolded && !sp.isAllIn;
+                    canCheck = sp.currentBet >= tableMaxBet;
+
+                    if (myTurnAndCanAct && promptView != null)
                     {
-                        SetActionButtons(true, true);
-                        if (promptView != null) promptView.Show("轮到你了！", Color.yellow);
+                        promptView.Show("轮到你了！", Color.yellow);
                     }
 
-                    // 渲染手牌
-                    if (sp.holeCards != null && sp.holeCards.Length >= 2 && playerCardViews.Count >= 2)
+                    if (playerCardViews != null && playerCardViews.Count >= 2)
                     {
-                        var c1 = new PokerCard { Suit = ParseSuit(sp.holeCards[0].suit), Rank = ParseRank(sp.holeCards[0].rank) };
-                        var c2 = new PokerCard { Suit = ParseSuit(sp.holeCards[1].suit), Rank = ParseRank(sp.holeCards[1].rank) };
-                        playerCardViews[0].SetCard(c1, true);
-                        playerCardViews[1].SetCard(c2, true);
+                        if (sp.holeCards != null && sp.holeCards.Length >= 2 && sp.holeCards[0] != null && sp.holeCards[1] != null)
+                        {
+                            var c1 = new PokerCard { Suit = ParseSuit(sp.holeCards[0].suit), Rank = ParseRank(sp.holeCards[0].rank) };
+                            var c2 = new PokerCard { Suit = ParseSuit(sp.holeCards[1].suit), Rank = ParseRank(sp.holeCards[1].rank) };
+                            if (playerCardViews[0] != null) playerCardViews[0].SetCard(c1, true);
+                            if (playerCardViews[1] != null) playerCardViews[1].SetCard(c2, true);
+                        }
+                        else
+                        {
+                            if (playerCardViews[0] != null) playerCardViews[0].HideCard();
+                            if (playerCardViews[1] != null) playerCardViews[1].HideCard();
+                        }
                     }
                 }
 
-                // 渲染公共座位信息
-                if (i < playerSeatViews.Count && playerSeatViews[i] != null)
+                if (playerSeatViews != null && i < playerSeatViews.Count && playerSeatViews[i] != null)
                 {
-                    playerSeatViews[i].SetHighlight(state.currentTurnUserId == sp.userId);
-                    var vp = new PokerPlayer(sp.username, sp.chips, sp.userId != SessionContext.UserId)
+                    playerSeatViews[i].SetHighlight(isMyTurn);
+                    var vp = new PokerPlayer(sp.username, sp.chips, !isLocalPlayer)
                     {
                         CurrentBet = sp.currentBet,
                         IsFolded = sp.isFolded,
                         IsAllIn = sp.isAllIn
                     };
-                    playerSeatViews[i].UpdateSeat(vp, sp.lastAction ?? "-");
+
+                    string actionText = sp.lastAction ?? "-";
+                    playerSeatViews[i].UpdateSeat(vp, actionText);
+                }
+
+                playerSummary.Add($"{sp.username} Bet:{sp.currentBet} 筹码:{sp.chips} 动作:{(sp.lastAction ?? "-")}");
+            }
+
+            // 清空多余座位，避免脏 UI
+            for (int i = state.players.Length; playerSeatViews != null && i < playerSeatViews.Count; i++)
+            {
+                if (playerSeatViews[i] != null)
+                {
+                    playerSeatViews[i].SetHighlight(false);
+                    playerSeatViews[i].UpdateSeat(null, "-");
                 }
             }
+
+            if (playersText != null)
+            {
+                playersText.text = playerSummary.Count > 0 ? string.Join("\n", playerSummary) : "等待玩家加入...";
+            }
+
+            SetActionButtons(foundLocalPlayer && myTurnAndCanAct, canCheck);
         }
 
         private Suit ParseSuit(string s) => Enum.TryParse(s, out Suit res) ? res : Suit.Spades;
