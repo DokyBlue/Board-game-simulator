@@ -119,8 +119,8 @@ namespace BoardGameSimulator.Networking
                 request.SetRequestHeader("Content-Type", "application/json");
                 request.SetRequestHeader("Authorization", $"Bearer {token}");
 
-                request.certificateHandler = new BypassCertificate();
-                request.SetRequestHeader("ngrok-skip-browser-warning", "true");
+                //request.certificateHandler = new BypassCertificate();
+                //request.SetRequestHeader("ngrok-skip-browser-warning", "true");
 
                 yield return request.SendWebRequest();
 
@@ -233,13 +233,13 @@ namespace BoardGameSimulator.Networking
         }
     }
 
-    public class BypassCertificate : CertificateHandler
-    {
-        protected override bool ValidateCertificate(byte[] certificateData)
-        {
-            return true;
-        }
-    }
+    //public class BypassCertificate : CertificateHandler
+    //{
+    //    protected override bool ValidateCertificate(byte[] certificateData)
+    //    {
+    //        return true;
+    //    }
+    //}
 
     public class LobbyApiResult
     {

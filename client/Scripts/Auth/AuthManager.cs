@@ -11,7 +11,7 @@ namespace BoardGameSimulator.Auth
         [Header("UI")]
         [SerializeField] private TMP_InputField usernameInput;
         [SerializeField] private TMP_InputField passwordInput;
-        [SerializeField] private TMP_InputField serverAddressInput;
+        //[SerializeField] private TMP_InputField serverAddressInput;
         [SerializeField] private TMP_Text feedbackText;
 
         [Header("Dependency")]
@@ -20,23 +20,27 @@ namespace BoardGameSimulator.Auth
         [Header("Scene")]
         [SerializeField] private string gameSelectionScene = "GameSelection";
 
+        private string serverAddress = "http://8.147.64.150:8080";
+
         public void Register()
         {
-            if (serverAddressInput != null && !string.IsNullOrWhiteSpace(serverAddressInput.text))
-            {
-                SessionContext.ServerBaseUrl = serverAddressInput.text.Trim().TrimEnd('/');
-            }
+            SessionContext.ServerBaseUrl = serverAddress; // 设置默认服务器地址
+            //if (serverAddressInput != null && !string.IsNullOrWhiteSpace(serverAddressInput.text))
+            //{
+            //    SessionContext.ServerBaseUrl = serverAddressInput.text.Trim().TrimEnd('/');
+            //}
             SetFeedback("请求中...", Color.yellow);
             StartCoroutine(authApiClient.Register(usernameInput.text.Trim(), passwordInput.text, HandleAuthResult));
         }
 
         public void Login()
         {
-            // 如果输入框不为空，就更新全局服务器地址（同时去掉两端多余空格和末尾的斜杠）
-            if (serverAddressInput != null && !string.IsNullOrWhiteSpace(serverAddressInput.text))
-            {
-                SessionContext.ServerBaseUrl = serverAddressInput.text.Trim().TrimEnd('/');
-            }
+            SessionContext.ServerBaseUrl = serverAddress; // 设置默认服务器地址
+            //// 如果输入框不为空，就更新全局服务器地址（同时去掉两端多余空格和末尾的斜杠）
+            //if (serverAddressInput != null && !string.IsNullOrWhiteSpace(serverAddressInput.text))
+            //{
+            //    SessionContext.ServerBaseUrl = serverAddressInput.text.Trim().TrimEnd('/');
+            //}
             SetFeedback("请求中...", Color.yellow);
             StartCoroutine(authApiClient.Login(usernameInput.text.Trim(), passwordInput.text, HandleAuthResult));
         }

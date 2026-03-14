@@ -8,6 +8,7 @@ using BoardGameSimulator.UI;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using BoardGameSimulator.Poker;
 
 namespace BoardGameSimulator.Poker
 {
@@ -18,6 +19,36 @@ namespace BoardGameSimulator.Poker
         Turn,
         River,
         Showdown
+    }
+
+    [Serializable]
+    public class ServerGameState
+    {
+        public int pot;
+        public string stage;
+        public long currentTurnUserId;
+        public ServerCard[] communityCards;
+        public ServerPlayer[] players;
+    }
+
+    [Serializable]
+    public class ServerPlayer
+    {
+        public long userId;
+        public string username;
+        public int chips;
+        public int currentBet;
+        public bool isFolded;
+        public bool isAllIn;
+        public string lastAction;
+        public ServerCard[] holeCards;
+    }
+
+    [Serializable]
+    public class ServerCard
+    {
+        public string suit;
+        public string rank;
     }
 
     public class TexasHoldemGameManager : MonoBehaviour
@@ -54,7 +85,7 @@ namespace BoardGameSimulator.Poker
         [SerializeField] private TMP_Text historyText;
         [SerializeField] private ActionPromptView promptView;
         [SerializeField] private ChipAnimator chipAnimator;
-        [SerializeField] private LobbyApiClient lobbyApiClient;
+        //[SerializeField] private LobbyApiClient lobbyApiClient;
 
         [Header("Scene")]
         [SerializeField] private string gameSelectionScene = "GameSelection";
@@ -104,75 +135,222 @@ namespace BoardGameSimulator.Poker
             public int RaiseAmount;
         }
 
-        private void Start()
+        //private void Start()
+        //{
+        //    HookButtons();
+        //    RenderRoomInfo();
+        //    RefreshStrategyPanel();
+        //    QueryHistory();
+
+        //    if (SessionContext.CurrentRoomId > 0)
+        //    {
+        //        StartCoroutine(LoadRoomAndStart());
+        //        return;
+        //    }
+
+        //    CreateTable();
+        //    StartCoroutine(RoundLoop());
+        //}
+
+        private async void Start()
         {
             HookButtons();
             RenderRoomInfo();
             RefreshStrategyPanel();
             QueryHistory();
 
+            // 如果 CurrentRoomId > 0，说明是联机模式
             if (SessionContext.CurrentRoomId > 0)
             {
-                StartCoroutine(LoadRoomAndStart());
-                return;
+                if (TcpNetworkManager.Instance != null)
+                {
+                    // 1. 订阅 TCP 收包事件
+                    TcpNetworkManager.Instance.OnPacketReceived += OnNetworkPacket;
+
+                    // 2. 在这里发起真正的 TCP 长连接拨号
+                    bool isConnected = await TcpNetworkManager.Instance.ConnectAsync();
+
+                    if (isConnected)
+                    {
+                        Debug.Log("[TCP] 成功连入 C++ 游戏服务器！");
+
+                        // 3. 连上后的第一件事：向 C++ 发送 1001 指令，告诉它我是谁，进哪个房间
+                        // 注意：这里的字段名需要和你 C++ 里解析的字段对应
+                        string joinJson = $"{{\"roomId\": {SessionContext.CurrentRoomId}, \"userId\": {SessionContext.UserId}, \"username\": \"{SessionContext.CurrentUser}\"}}";
+                        TcpNetworkManager.Instance.SendMessage(1001, joinJson);
+                    }
+                    else
+                    {
+                        Debug.LogError("[TCP] 连接 C++ 服务器失败！请检查 IP 和安全组端口。");
+                        if (stateText != null) stateText.text = "连接游戏服务器失败，请重试";
+                        return; // 没连上就直接终止后续逻辑
+                    }
+
+                    // 4. 界面初始化
+                    _isWaitingForHostStart = true;
+                    ToggleRoundChoiceButtons(SessionContext.IsRoomOwner);
+                    if (stateText != null) stateText.text = SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 开始对局" : "等待房主开始游戏";
+                    if (promptView != null) promptView.Show("已连接 TCP，等待游戏开始...", Color.green);
+                }
+                return; // 联机模式直接 return，不再启动本地发牌协程
             }
 
+            // 单机模式原逻辑
             CreateTable();
             StartCoroutine(RoundLoop());
         }
 
-        private void HookButtons()
+        private void OnDestroy()
         {
-            callButton.onClick.AddListener(() => _playerAction = PlayerActionType.Call);
-            if (checkButton != null)
+            // 退出场景时，务必注销事件，防止报错
+            if (TcpNetworkManager.Instance != null)
             {
-                checkButton.onClick.AddListener(() => _playerAction = PlayerActionType.Check);
+                TcpNetworkManager.Instance.OnPacketReceived -= OnNetworkPacket;
             }
-            raiseButton.onClick.AddListener(() => _playerAction = PlayerActionType.Raise);
-            if (allInButton != null)
-            {
-                allInButton.onClick.AddListener(() => _playerAction = PlayerActionType.AllIn);
-            }
-            foldButton.onClick.AddListener(() => _playerAction = PlayerActionType.Fold);
-            if (nextRoundButton != null)
-            {
-                nextRoundButton.onClick.AddListener(StartNextRound);
-                nextRoundButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
-                nextRoundButton.interactable = false;
-            }
+        }
 
-            if (resetChipsButton != null)
+        private void OnNetworkPacket(uint msgCode, string body)
+        {
+            try
             {
-                resetChipsButton.onClick.AddListener(ResetChipsAndRestart);
-                resetChipsButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
-                resetChipsButton.interactable = false;
-            }
-
-            if (leaveRoomButton != null)
-            {
-                leaveRoomButton.onClick.AddListener(LeaveRoomAndBackLobby);
-            }
-
-            if (historyQueryButton != null)
-            {
-                historyQueryButton.onClick.AddListener(QueryHistory);
-            }
-
-            if (historyClearButton != null)
-            {
-                historyClearButton.onClick.AddListener(() =>
+                if (msgCode == 3001) // 收到 C++ 推送的牌桌同步数据
                 {
-                    if (historyQueryInput != null)
+                    var serverState = JsonUtility.FromJson<ServerGameState>(body);
+                    _isWaitingForHostStart = false;
+                    ToggleRoundChoiceButtons(false);
+                    if (stateText != null) stateText.text = "游戏进行中...";
+                    RenderServerState(serverState);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"JSON 解析异常: {e.Message}\n收到数据: {body}");
+            }
+        }
+
+        private void RenderServerState(ServerGameState state)
+        {
+            if (state == null || state.players == null) return;
+
+            // 1. 更新底池
+            if (_pot != state.pot)
+            {
+                if (chipAnimator != null) chipAnimator.AnimatePot(_pot, state.pot);
+                _pot = state.pot;
+            }
+
+            boardText.text = $"{state.stage} | 底池: {_pot}";
+
+            // 2. 更新公共牌
+            for (int i = 0; i < boardCardViews.Count; i++)
+            {
+                if (state.communityCards != null && i < state.communityCards.Length)
+                {
+                    var sc = state.communityCards[i];
+                    var card = new PokerCard { Suit = ParseSuit(sc.suit), Rank = ParseRank(sc.rank) };
+                    boardCardViews[i].SetCard(card, true);
+                }
+                else
+                {
+                    boardCardViews[i].HideCard();
+                }
+            }
+
+            // 3. 更新玩家座位与手牌
+            for (int i = 0; i < state.players.Length; i++)
+            {
+                var sp = state.players[i];
+
+                // 处理本地玩家自己的视角
+                if (sp.userId == SessionContext.UserId)
+                {
+                    bool isMyTurn = (state.currentTurnUserId == sp.userId);
+                    if (isMyTurn && !sp.isFolded && !sp.isAllIn)
                     {
-                        historyQueryInput.text = string.Empty;
+                        SetActionButtons(true, true);
+                        if (promptView != null) promptView.Show("轮到你了！", Color.yellow);
                     }
 
-                    QueryHistory();
-                });
-            }
+                    // 渲染手牌
+                    if (sp.holeCards != null && sp.holeCards.Length >= 2 && playerCardViews.Count >= 2)
+                    {
+                        var c1 = new PokerCard { Suit = ParseSuit(sp.holeCards[0].suit), Rank = ParseRank(sp.holeCards[0].rank) };
+                        var c2 = new PokerCard { Suit = ParseSuit(sp.holeCards[1].suit), Rank = ParseRank(sp.holeCards[1].rank) };
+                        playerCardViews[0].SetCard(c1, true);
+                        playerCardViews[1].SetCard(c2, true);
+                    }
+                }
 
-            SetActionButtons(false);
+                // 渲染公共座位信息
+                if (i < playerSeatViews.Count && playerSeatViews[i] != null)
+                {
+                    playerSeatViews[i].SetHighlight(state.currentTurnUserId == sp.userId);
+                    var vp = new PokerPlayer(sp.username, sp.chips, sp.userId != SessionContext.UserId)
+                    {
+                        CurrentBet = sp.currentBet,
+                        IsFolded = sp.isFolded,
+                        IsAllIn = sp.isAllIn
+                    };
+                    playerSeatViews[i].UpdateSeat(vp, sp.lastAction ?? "-");
+                }
+            }
         }
+
+        private Suit ParseSuit(string s) => Enum.TryParse(s, out Suit res) ? res : Suit.Spades;
+        private Rank ParseRank(string r) => Enum.TryParse(r, out Rank res) ? res : Rank.Two;
+
+        //private void HookButtons()
+        //{
+        //    callButton.onClick.AddListener(() => _playerAction = PlayerActionType.Call);
+        //    if (checkButton != null)
+        //    {
+        //        checkButton.onClick.AddListener(() => _playerAction = PlayerActionType.Check);
+        //    }
+        //    raiseButton.onClick.AddListener(() => _playerAction = PlayerActionType.Raise);
+        //    if (allInButton != null)
+        //    {
+        //        allInButton.onClick.AddListener(() => _playerAction = PlayerActionType.AllIn);
+        //    }
+        //    foldButton.onClick.AddListener(() => _playerAction = PlayerActionType.Fold);
+        //    if (nextRoundButton != null)
+        //    {
+        //        nextRoundButton.onClick.AddListener(StartNextRound);
+        //        nextRoundButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
+        //        nextRoundButton.interactable = false;
+        //    }
+
+        //    if (resetChipsButton != null)
+        //    {
+        //        resetChipsButton.onClick.AddListener(ResetChipsAndRestart);
+        //        resetChipsButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
+        //        resetChipsButton.interactable = false;
+        //    }
+
+        //    if (leaveRoomButton != null)
+        //    {
+        //        leaveRoomButton.onClick.AddListener(LeaveRoomAndBackLobby);
+        //    }
+
+        //    if (historyQueryButton != null)
+        //    {
+        //        historyQueryButton.onClick.AddListener(QueryHistory);
+        //    }
+
+        //    if (historyClearButton != null)
+        //    {
+        //        historyClearButton.onClick.AddListener(() =>
+        //        {
+        //            if (historyQueryInput != null)
+        //            {
+        //                historyQueryInput.text = string.Empty;
+        //            }
+
+        //            QueryHistory();
+        //        });
+        //    }
+
+        //    SetActionButtons(false);
+        //}
 
         public void StartNewRoundManual()
         {
@@ -872,128 +1050,128 @@ namespace BoardGameSimulator.Poker
         }
 
 
-        private IEnumerator LoadRoomAndStart()
-        {
-            if (lobbyApiClient == null)
-            {
-                CreateTable();
-                StartCoroutine(RoundLoop());
-                yield break;
-            }
+        //private IEnumerator LoadRoomAndStart()
+        //{
+        //    if (lobbyApiClient == null)
+        //    {
+        //        CreateTable();
+        //        StartCoroutine(RoundLoop());
+        //        yield break;
+        //    }
 
-            LobbyStateApiResult stateResult = null;
-            yield return StartCoroutine(lobbyApiClient.GetRoomState(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-            {
-                stateResult = result;
-            }));
+        //    LobbyStateApiResult stateResult = null;
+        //    yield return StartCoroutine(lobbyApiClient.GetRoomState(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+        //    {
+        //        stateResult = result;
+        //    }));
 
-            if (stateResult == null || !stateResult.Success || stateResult.Response == null || stateResult.Response.members == null || stateResult.Response.members.Length == 0)
-            {
-                CreateTable();
-                if (stateText != null && stateResult != null && !string.IsNullOrWhiteSpace(stateResult.Message))
-                {
-                    stateText.text = $"获取房间状态失败：{stateResult.Message}";
-                }
+        //    if (stateResult == null || !stateResult.Success || stateResult.Response == null || stateResult.Response.members == null || stateResult.Response.members.Length == 0)
+        //    {
+        //        CreateTable();
+        //        if (stateText != null && stateResult != null && !string.IsNullOrWhiteSpace(stateResult.Message))
+        //        {
+        //            stateText.text = $"获取房间状态失败：{stateResult.Message}";
+        //        }
 
-                StartCoroutine(RoundLoop());
-                yield break;
-            }
+        //        StartCoroutine(RoundLoop());
+        //        yield break;
+        //    }
 
-            CreateTableFromRoomMembers(stateResult.Response.members);
+        //    CreateTableFromRoomMembers(stateResult.Response.members);
 
-            if (stateResult.Response.gameStarted || SessionContext.AutoStartOnSceneEnter || SessionContext.CurrentRoomId == 0)
-            {
-                SessionContext.AutoStartOnSceneEnter = false;
-                StartCoroutine(RoundLoop());
-                yield break;
-            }
+        //    if (stateResult.Response.gameStarted || SessionContext.AutoStartOnSceneEnter || SessionContext.CurrentRoomId == 0)
+        //    {
+        //        SessionContext.AutoStartOnSceneEnter = false;
+        //        StartCoroutine(RoundLoop());
+        //        yield break;
+        //    }
 
-            _waitingForRoundChoice = true;
-            _isWaitingForHostStart = true;
-            ToggleRoundChoiceButtons(SessionContext.IsRoomOwner);
+        //    _waitingForRoundChoice = true;
+        //    _isWaitingForHostStart = true;
+        //    ToggleRoundChoiceButtons(SessionContext.IsRoomOwner);
 
-            if (stateText != null)
-            {
-                stateText.text = SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 开始联机对局" : "等待房主点击 Next Round 开始新游戏";
-            }
+        //    if (stateText != null)
+        //    {
+        //        stateText.text = SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 开始联机对局" : "等待房主点击 Next Round 开始新游戏";
+        //    }
 
-            if (promptView != null)
-            {
-                promptView.Show(SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 后将同步开始" : "等待房主点击 Next Round 开始新游戏", Color.white);
-            }
+        //    if (promptView != null)
+        //    {
+        //        promptView.Show(SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 后将同步开始" : "等待房主点击 Next Round 开始新游戏", Color.white);
+        //    }
 
-            RenderStaticUI(BettingStreet.Preflop);
-            StartCoroutine(PollRoomStateUntilStart());
-        }
+        //    RenderStaticUI(BettingStreet.Preflop);
+        //    StartCoroutine(PollRoomStateUntilStart());
+        //}
 
-        private IEnumerator PollRoomStateUntilStart()
-        {
-            while (_isWaitingForHostStart && SessionContext.CurrentRoomId > 0 && lobbyApiClient != null)
-            {
-                LobbyStateApiResult stateResult = null;
-                yield return StartCoroutine(lobbyApiClient.GetRoomState(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-                {
-                    stateResult = result;
-                }));
+        //private IEnumerator PollRoomStateUntilStart()
+        //{
+        //    while (_isWaitingForHostStart && SessionContext.CurrentRoomId > 0 && lobbyApiClient != null)
+        //    {
+        //        LobbyStateApiResult stateResult = null;
+        //        yield return StartCoroutine(lobbyApiClient.GetRoomState(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+        //        {
+        //            stateResult = result;
+        //        }));
 
-                if (stateResult != null && stateResult.Success && stateResult.Response != null)
-                {
-                    if (stateResult.Response.members != null && stateResult.Response.members.Length > 0)
-                    {
-                        CreateTableFromRoomMembers(stateResult.Response.members);
-                        RenderPlayers();
-                    }
+        //        if (stateResult != null && stateResult.Success && stateResult.Response != null)
+        //        {
+        //            if (stateResult.Response.members != null && stateResult.Response.members.Length > 0)
+        //            {
+        //                CreateTableFromRoomMembers(stateResult.Response.members);
+        //                //RenderPlayers();
+        //            }
 
-                    if (stateResult.Response.gameStarted)
-                    {
-                        _isWaitingForHostStart = false;
-                        _waitingForRoundChoice = false;
-                        ToggleRoundChoiceButtons(false);
-                        StartCoroutine(RoundLoop());
-                        yield break;
-                    }
-                }
+        //            if (stateResult.Response.gameStarted)
+        //            {
+        //                _isWaitingForHostStart = false;
+        //                _waitingForRoundChoice = false;
+        //                ToggleRoundChoiceButtons(false);
+        //                StartCoroutine(RoundLoop());
+        //                yield break;
+        //            }
+        //        }
 
-                yield return new WaitForSeconds(1.5f);
-            }
-        }
+        //        yield return new WaitForSeconds(1.5f);
+        //    }
+        //}
 
-        private void CreateTableFromRoomMembers(LobbyApiClient.LobbyMember[] members)
-        {
-            _players.Clear();
-            _botStyles.Clear();
-            _lastActions.Clear();
+        //private void CreateTableFromRoomMembers(LobbyApiClient.LobbyMember[] members)
+        //{
+        //    _players.Clear();
+        //    _botStyles.Clear();
+        //    _lastActions.Clear();
 
-            var memberList = members
-                .Where(member => member != null && !string.IsNullOrWhiteSpace(member.username))
-                .Take(MaxRoomPlayers)
-                .ToList();
+        //    var memberList = members
+        //        .Where(member => member != null && !string.IsNullOrWhiteSpace(member.username))
+        //        .Take(MaxRoomPlayers)
+        //        .ToList();
 
-            if (memberList.Count == 0)
-            {
-                var fallbackName = string.IsNullOrWhiteSpace(SessionContext.CurrentUser) ? "Player" : SessionContext.CurrentUser;
-                _players.Add(new PokerPlayer(fallbackName, initialChips, false));
-            }
-            else
-            {
-                foreach (var member in memberList)
-                {
-                    var isSelf = member.userId == SessionContext.UserId;
-                    _players.Add(new PokerPlayer(member.username, initialChips, !isSelf));
-                }
-            }
+        //    if (memberList.Count == 0)
+        //    {
+        //        var fallbackName = string.IsNullOrWhiteSpace(SessionContext.CurrentUser) ? "Player" : SessionContext.CurrentUser;
+        //        _players.Add(new PokerPlayer(fallbackName, initialChips, false));
+        //    }
+        //    else
+        //    {
+        //        foreach (var member in memberList)
+        //        {
+        //            var isSelf = member.userId == SessionContext.UserId;
+        //            _players.Add(new PokerPlayer(member.username, initialChips, !isSelf));
+        //        }
+        //    }
 
-            for (var i = _players.Count; i < MaxRoomPlayers; i++)
-            {
-                var botName = $"Bot-{i + 1}";
-                _players.Add(new PokerPlayer(botName, initialChips, true));
-            }
+        //    for (var i = _players.Count; i < MaxRoomPlayers; i++)
+        //    {
+        //        var botName = $"Bot-{i + 1}";
+        //        _players.Add(new PokerPlayer(botName, initialChips, true));
+        //    }
 
-            for (var i = 0; i < _players.Count; i++)
-            {
-                _lastActions[_players[i].Name] = "Waiting";
-            }
-        }
+        //    for (var i = 0; i < _players.Count; i++)
+        //    {
+        //        _lastActions[_players[i].Name] = "Waiting";
+        //    }
+        //}
 
         private void CreateTable()
         {
@@ -1110,59 +1288,59 @@ namespace BoardGameSimulator.Poker
             }
         }
 
-        public void StartNextRound()
-        {
-            if (!_waitingForRoundChoice)
-            {
-                return;
-            }
+        //public void StartNextRound()
+        //{
+        //    if (!_waitingForRoundChoice)
+        //    {
+        //        return;
+        //    }
 
-            if (SessionContext.CurrentRoomId > 0 && !SessionContext.IsRoomOwner)
-            {
-                return;
-            }
+        //    if (SessionContext.CurrentRoomId > 0 && !SessionContext.IsRoomOwner)
+        //    {
+        //        return;
+        //    }
 
-            if (SessionContext.CurrentRoomId > 0)
-            {
-                StartCoroutine(StartOnlineGameAsOwner());
-                return;
-            }
+        //    if (SessionContext.CurrentRoomId > 0)
+        //    {
+        //        StartCoroutine(StartOnlineGameAsOwner());
+        //        return;
+        //    }
 
-            _roundNumber += 1;
-            StopAllCoroutines();
-            StartCoroutine(RoundLoop());
-        }
+        //    _roundNumber += 1;
+        //    StopAllCoroutines();
+        //    StartCoroutine(RoundLoop());
+        //}
 
-        private IEnumerator StartOnlineGameAsOwner()
-        {
-            if (lobbyApiClient == null)
-            {
-                yield break;
-            }
+        //private IEnumerator StartOnlineGameAsOwner()
+        //{
+        //    if (lobbyApiClient == null)
+        //    {
+        //        yield break;
+        //    }
 
-            LobbyStartApiResult startResult = null;
-            yield return StartCoroutine(lobbyApiClient.StartGame(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-            {
-                startResult = result;
-            }));
+        //    LobbyStartApiResult startResult = null;
+        //    yield return StartCoroutine(lobbyApiClient.StartGame(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+        //    {
+        //        startResult = result;
+        //    }));
 
-            if (startResult == null || !startResult.Success)
-            {
-                if (promptView != null)
-                {
-                    promptView.Show($"开始游戏失败：{startResult?.Message}", Color.red);
-                }
+        //    if (startResult == null || !startResult.Success)
+        //    {
+        //        if (promptView != null)
+        //        {
+        //            promptView.Show($"开始游戏失败：{startResult?.Message}", Color.red);
+        //        }
 
-                yield break;
-            }
+        //        yield break;
+        //    }
 
-            _isWaitingForHostStart = false;
-            _waitingForRoundChoice = false;
-            SessionContext.AutoStartOnSceneEnter = true;
-            _roundNumber += 1;
-            StopAllCoroutines();
-            StartCoroutine(RoundLoop());
-        }
+        //    _isWaitingForHostStart = false;
+        //    _waitingForRoundChoice = false;
+        //    SessionContext.AutoStartOnSceneEnter = true;
+        //    _roundNumber += 1;
+        //    StopAllCoroutines();
+        //    StartCoroutine(RoundLoop());
+        //}
 
         public void ResetChipsAndRestart()
         {
@@ -1196,38 +1374,106 @@ namespace BoardGameSimulator.Poker
             }
         }
 
-        public void LeaveRoomAndBackLobby()
+        //public void LeaveRoomAndBackLobby()
+        //{
+        //    if (SessionContext.CurrentRoomId <= 0 || lobbyApiClient == null)
+        //    {
+        //        SessionContext.ClearRoom();
+        //        UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
+        //        return;
+        //    }
+
+        //    StartCoroutine(LeaveRoomCoroutine());
+        //}
+
+        private void HookButtons()
         {
-            if (SessionContext.CurrentRoomId <= 0 || lobbyApiClient == null)
+            // 核心改变：所有游戏动作统一交由 SendNetworkAction 处理
+            callButton.onClick.AddListener(() => SendNetworkAction(PlayerActionType.Call, 0));
+            if (checkButton != null) checkButton.onClick.AddListener(() => SendNetworkAction(PlayerActionType.Check, 0));
+            raiseButton.onClick.AddListener(() => SendNetworkAction(PlayerActionType.Raise, ParseRaiseAmount()));
+            if (allInButton != null) allInButton.onClick.AddListener(() => SendNetworkAction(PlayerActionType.AllIn, 0));
+            foldButton.onClick.AddListener(() => SendNetworkAction(PlayerActionType.Fold, 0));
+
+            if (nextRoundButton != null)
             {
-                SessionContext.ClearRoom();
-                UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
+                nextRoundButton.onClick.AddListener(StartNextRound);
+                nextRoundButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
+                nextRoundButton.interactable = false;
+            }
+
+            if (resetChipsButton != null) { resetChipsButton.onClick.AddListener(ResetChipsAndRestart); resetChipsButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0); resetChipsButton.interactable = false; }
+            if (leaveRoomButton != null) leaveRoomButton.onClick.AddListener(LeaveRoomAndBackLobby);
+            if (historyQueryButton != null) historyQueryButton.onClick.AddListener(QueryHistory);
+            if (historyClearButton != null) historyClearButton.onClick.AddListener(() => { if (historyQueryInput != null) historyQueryInput.text = string.Empty; QueryHistory(); });
+
+            SetActionButtons(false);
+        }
+
+        private void SendNetworkAction(PlayerActionType action, int amount)
+        {
+            if (SessionContext.CurrentRoomId == 0)
+            {
+                // 单机模式：继续走本地协程赋值
+                _playerAction = action;
                 return;
             }
 
-            StartCoroutine(LeaveRoomCoroutine());
+            // 联机模式：向 C++ 发送动作指令 (MsgCode: 2001)
+            SetActionButtons(false); // 点击后立刻禁用按钮，防抖
+            string json = $"{{\"action\":\"{action}\", \"amount\":{amount}}}";
+            TcpNetworkManager.Instance.SendMessage(2001, json);
         }
 
-        private IEnumerator LeaveRoomCoroutine()
+        public void LeaveRoomAndBackLobby()
         {
-            var done = false;
-            StartCoroutine(lobbyApiClient.LeaveRoom(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+            if (SessionContext.CurrentRoomId > 0 && TcpNetworkManager.Instance != null && TcpNetworkManager.Instance.IsConnected)
             {
-                done = true;
-                if (!result.Success)
-                {
-                    Debug.LogWarning($"退出房间失败：{result.Message}");
-                }
-            }));
-
-            while (!done)
-            {
-                yield return null;
+                // 发送退出指令给 C++ (MsgCode: 2003)
+                TcpNetworkManager.Instance.SendMessage(2003, "{}");
             }
-
             SessionContext.ClearRoom();
             UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
         }
+
+        public void StartNextRound()
+        {
+            if (SessionContext.CurrentRoomId > 0)
+            {
+                // 房主发送开局指令 (MsgCode: 2002)
+                if (SessionContext.IsRoomOwner && TcpNetworkManager.Instance != null)
+                {
+                    TcpNetworkManager.Instance.SendMessage(2002, "{}");
+                }
+                return;
+            }
+
+            if (!_waitingForRoundChoice) return;
+            _roundNumber += 1;
+            StopAllCoroutines();
+            StartCoroutine(RoundLoop());
+        }
+
+        //private IEnumerator LeaveRoomCoroutine()
+        //{
+        //    var done = false;
+        //    StartCoroutine(lobbyApiClient.LeaveRoom(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
+        //    {
+        //        done = true;
+        //        if (!result.Success)
+        //        {
+        //            Debug.LogWarning($"退出房间失败：{result.Message}");
+        //        }
+        //    }));
+
+        //    while (!done)
+        //    {
+        //        yield return null;
+        //    }
+
+        //    SessionContext.ClearRoom();
+        //    UnityEngine.SceneManagement.SceneManager.LoadScene(gameSelectionScene);
+        //}
 
         private void RenderRoomInfo()
         {

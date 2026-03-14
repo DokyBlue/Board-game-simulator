@@ -9,6 +9,7 @@ using UnityEngine;
 
 namespace BoardGameSimulator.Networking
 {
+
     public readonly struct NetworkPacket
     {
         public readonly uint MsgCode;
@@ -23,10 +24,25 @@ namespace BoardGameSimulator.Networking
 
     public class TcpNetworkManager : MonoBehaviour
     {
+
+        // --- 单例模式 ---
+        public static TcpNetworkManager Instance { get; private set; }
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(this.gameObject);
+                return;
+            }
+            Instance = this;
+            DontDestroyOnLoad(this.gameObject); // 保证切换场景时网络不断开
+        }
+
         private const int HeaderLength = 8;
 
         [SerializeField] private string host = "127.0.0.1";
-        [SerializeField] private int port = 9527;
+        [SerializeField] private int port = 8086;
 
         private readonly ConcurrentQueue<NetworkPacket> receiveQueue = new ConcurrentQueue<NetworkPacket>();
         private readonly object sendLock = new object();
