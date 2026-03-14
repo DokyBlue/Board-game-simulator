@@ -17,6 +17,9 @@
 #include <random>
 #include <sstream>
 #include <mutex>
+#include <cctype>
+
+#include <nlohmann/json.hpp>
 
 #include "ngx_c_conf.h"
 #include "ngx_macro.h"
@@ -30,74 +33,59 @@
 
 namespace
 {
-//在简单场景下从JSON文本中抽取一个字符串字段
-bool ExtractJsonString(const std::string &json,const char *key,std::string &value)
+std::string ToLower(const std::string &text)
 {
-    std::string pattern = "\"";
-    pattern += key;
-    pattern += "\"";
-
-    std::size_t keyPos = json.find(pattern);
-    if(keyPos == std::string::npos)
-    {
-        return false;
-    }
-
-    std::size_t colonPos = json.find(':',keyPos + pattern.size());
-    if(colonPos == std::string::npos)
-    {
-        return false;
-    }
-
-    std::size_t firstQuote = json.find('"',colonPos + 1);
-    if(firstQuote == std::string::npos)
-    {
-        return false;
-    }
-
-    std::size_t secondQuote = json.find('"',firstQuote + 1);
-    if(secondQuote == std::string::npos || secondQuote <= firstQuote)
-    {
-        return false;
-    }
-
-    value = json.substr(firstQuote + 1,secondQuote - firstQuote - 1);
-    return true;
+    std::string lowered = text;
+    std::transform(lowered.begin(),lowered.end(),lowered.begin(),[](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    return lowered;
 }
 
-bool ExtractJsonUint(const std::string &json,const char *key,uint32_t &value)
+void EncodeCard(const std::string &cardCode,std::string &rank,std::string &suit)
 {
-    std::string pattern = "\"";
-    pattern += key;
-    pattern += "\"";
+    rank = "Two";
+    suit = "Spades";
 
-    std::size_t keyPos = json.find(pattern);
-    if(keyPos == std::string::npos)
+    if(cardCode.size() < 2)
     {
-        return false;
+        return;
     }
 
-    std::size_t colonPos = json.find(':',keyPos + pattern.size());
-    if(colonPos == std::string::npos)
+    std::string suitPart;
+    char rankCode = cardCode[0];
+
+    if(cardCode.size() >= 2 && cardCode[1] == '0')
     {
-        return false;
+        rankCode = 'T';
+        suitPart = cardCode.substr(2);
+    }
+    else
+    {
+        suitPart = cardCode.substr(1);
     }
 
-    std::size_t firstDigit = json.find_first_of("0123456789",colonPos + 1);
-    if(firstDigit == std::string::npos)
-    {
-        return false;
-    }
+    if(rankCode == '2') rank = "Two";
+    else if(rankCode == '3') rank = "Three";
+    else if(rankCode == '4') rank = "Four";
+    else if(rankCode == '5') rank = "Five";
+    else if(rankCode == '6') rank = "Six";
+    else if(rankCode == '7') rank = "Seven";
+    else if(rankCode == '8') rank = "Eight";
+    else if(rankCode == '9') rank = "Nine";
+    else if(rankCode == 'T') rank = "Ten";
+    else if(rankCode == 'J') rank = "Jack";
+    else if(rankCode == 'Q') rank = "Queen";
+    else if(rankCode == 'K') rank = "King";
+    else if(rankCode == 'A') rank = "Ace";
 
-    std::size_t endDigit = json.find_first_not_of("0123456789",firstDigit);
-    std::string numStr = json.substr(firstDigit,endDigit == std::string::npos ? std::string::npos : endDigit - firstDigit);
-    if(numStr.empty())
-    {
-        return false;
-    }
+    if(suitPart == "Clubs") suit = "Clubs";
+    else if(suitPart == "Diamonds") suit = "Diamonds";
+    else if(suitPart == "Hearts") suit = "Hearts";
+    else if(suitPart == "Spades") suit = "Spades";
+}
 
-    value = static_cast<uint32_t>(strtoul(numStr.c_str(),NULL,10));
-    return true;
+bool IsActivePlayer(const GameRoom::PlayerState &state)
+{
+    return !state.isFolded && !state.isAllIn;
 }
 } // namespace
 
@@ -350,9 +338,13 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
         return false;
     }
 
-    std::string body(pPkgBody,iBodyLength);
     uint32_t roomId = 0;
-    if(!ExtractJsonUint(body,"roomId",roomId))
+    try
+    {
+        nlohmann::json body = nlohmann::json::parse(std::string(pPkgBody,iBodyLength));
+        roomId = body.at("roomId").get<uint32_t>();
+    }
+    catch(...)
     {
         return false;
     }
@@ -380,6 +372,8 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
         {
             room->players.push_back(pConn);
         }
+
+        room->playerStates[pConn] = GameRoom::PlayerState();
     }
 
     SendJsonPkgToClient(pMsgHeader,1001,"{\"status\":\"ok\",\"roomId\":" + std::to_string(roomId) + "}");
@@ -388,7 +382,22 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
 
 bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength)
 {
+    (void)pMsgHeader;
+
     if(pPkgBody == NULL || iBodyLength == 0)
+    {
+        return false;
+    }
+
+    std::string action;
+    int amount = 0;
+    try
+    {
+        nlohmann::json body = nlohmann::json::parse(std::string(pPkgBody,iBodyLength));
+        action = body.at("action").get<std::string>();
+        amount = body.value("amount",0);
+    }
+    catch(...)
     {
         return false;
     }
@@ -415,35 +424,110 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
         room = roomIt->second;
     }
 
-    std::string body(pPkgBody,iBodyLength);
-    std::string action;
-    ExtractJsonString(body,"action",action);
-
     {
         std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
-
-        if(action == "call" || action == "CALL")
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator playerIt = room->playerStates.find(pConn);
+        if(playerIt == room->playerStates.end())
         {
-            uint32_t amount = 0;
-            if(ExtractJsonUint(body,"amount",amount))
+            return false;
+        }
+
+        GameRoom::PlayerState &player = playerIt->second;
+        const std::string normalizedAction = ToLower(action);
+
+        if(normalizedAction == "call" || normalizedAction == "check")
+        {
+            int required = static_cast<int>(room->maxBet) - player.currentBet;
+            if(required < 0)
             {
-                room->pot += amount;
+                required = 0;
             }
-            else
+
+            int paid = std::min(player.chips,required);
+            player.chips -= paid;
+            player.currentBet += paid;
+            room->pot += static_cast<uint32_t>(paid);
+            player.lastAction = (normalizedAction == "check" ? "Check" : "Call");
+
+            if(player.chips == 0)
             {
-                room->pot += 10;
+                player.isAllIn = true;
             }
         }
-        else if(action == "fold" || action == "FOLD")
+        else if(normalizedAction == "raise")
         {
-            room->players.erase(std::remove(room->players.begin(),room->players.end(),pConn),room->players.end());
-            room->holeCards.erase(pConn);
+            int raiseAmount = std::max(0,amount);
+            int paid = std::min(player.chips,raiseAmount);
+            player.chips -= paid;
+            player.currentBet += paid;
+            room->pot += static_cast<uint32_t>(paid);
+            if(static_cast<uint32_t>(player.currentBet) > room->maxBet)
+            {
+                room->maxBet = static_cast<uint32_t>(player.currentBet);
+            }
+            player.lastAction = "Raise";
+
+            if(player.chips == 0)
+            {
+                player.isAllIn = true;
+            }
+        }
+        else if(normalizedAction == "allin" || normalizedAction == "all_in" || normalizedAction == "all in")
+        {
+            int paid = player.chips;
+            player.chips = 0;
+            player.currentBet += paid;
+            room->pot += static_cast<uint32_t>(paid);
+            player.isAllIn = true;
+            player.lastAction = "AllIn";
+
+            if(static_cast<uint32_t>(player.currentBet) > room->maxBet)
+            {
+                room->maxBet = static_cast<uint32_t>(player.currentBet);
+            }
+        }
+        else if(normalizedAction == "fold")
+        {
+            player.isFolded = true;
+            player.lastAction = "Fold";
+        }
+
+        room->currentTurnUserId = 0;
+        if(!room->players.empty())
+        {
+            std::size_t currentIndex = 0;
+            bool foundCurrent = false;
+            for(std::size_t i = 0; i < room->players.size(); ++i)
+            {
+                if(room->players[i] == pConn)
+                {
+                    currentIndex = i;
+                    foundCurrent = true;
+                    break;
+                }
+            }
+
+            std::size_t startIndex = foundCurrent ? currentIndex : 0;
+            for(std::size_t step = 1; step <= room->players.size(); ++step)
+            {
+                std::size_t nextIndex = (startIndex + step) % room->players.size();
+                lpngx_connection_t candidateConn = room->players[nextIndex];
+                if(candidateConn == NULL)
+                {
+                    continue;
+                }
+
+                std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator candidateStateIt = room->playerStates.find(candidateConn);
+                if(candidateStateIt != room->playerStates.end() && IsActivePlayer(candidateStateIt->second))
+                {
+                    room->currentTurnUserId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(candidateConn));
+                    break;
+                }
+            }
         }
     }
 
     BroadcastGameState(roomId,room);
-
-    (void)pMsgHeader;
     return true;
 }
 
@@ -486,9 +570,18 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
 
         room->isPlaying = true;
         room->pot = 0;
+        room->maxBet = 0;
         room->stage = "Preflop";
         room->communityCards.clear();
         room->holeCards.clear();
+
+        for(std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.begin(); it != room->playerStates.end(); ++it)
+        {
+            it->second.currentBet = 0;
+            it->second.isFolded = false;
+            it->second.isAllIn = false;
+            it->second.lastAction = "Waiting";
+        }
 
         for(std::size_t i = 0; i < room->players.size(); ++i)
         {
@@ -529,46 +622,71 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
     {
         std::shared_lock<std::shared_mutex> roomLock(room->roomMutex);
 
-        std::ostringstream oss;
-        oss << "{\"roomId\":" << roomId
-            << ",\"pot\":" << room->pot
-            << ",\"playerCount\":" << room->players.size()
-            << ",\"stage\":\"" << room->stage << "\""
-            << ",\"currentTurnUserId\":" << room->currentTurnUserId
-            << ",\"communityCards\":[";
+        nlohmann::json state;
+        state["roomId"] = roomId;
+        state["pot"] = room->pot;
+        state["stage"] = room->stage;
+        state["currentTurnUserId"] = room->currentTurnUserId;
+        state["communityCards"] = nlohmann::json::array();
 
         for(std::size_t i = 0; i < room->communityCards.size(); ++i)
         {
-            if(i != 0)
-            {
-                oss << ",";
-            }
-            oss << "\"" << room->communityCards[i] << "\"";
-        }
-        oss << "],\"holeCards\":{";
+            std::string rank;
+            std::string suit;
+            EncodeCard(room->communityCards[i],rank,suit);
 
-        bool firstPlayer = true;
-        for(std::unordered_map<lpngx_connection_t,std::vector<std::string>>::const_iterator it = room->holeCards.begin(); it != room->holeCards.end(); ++it)
+            nlohmann::json cardJson;
+            cardJson["rank"] = rank;
+            cardJson["suit"] = suit;
+            state["communityCards"].push_back(cardJson);
+        }
+
+        state["players"] = nlohmann::json::array();
+        for(std::size_t i = 0; i < room->players.size(); ++i)
         {
-            if(!firstPlayer)
+            lpngx_connection_t playerConn = room->players[i];
+            if(playerConn == NULL)
             {
-                oss << ",";
+                continue;
             }
-            firstPlayer = false;
-            oss << "\"" << reinterpret_cast<uintptr_t>(it->first) << "\":[";
-            for(std::size_t i = 0; i < it->second.size(); ++i)
-            {
-                if(i != 0)
-                {
-                    oss << ",";
-                }
-                oss << "\"" << it->second[i] << "\"";
-            }
-            oss << "]";
-        }
-        oss << "}}";
 
-        roomStateJson = oss.str();
+            GameRoom::PlayerState stateForPlayer;
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stIt = room->playerStates.find(playerConn);
+            if(stIt != room->playerStates.end())
+            {
+                stateForPlayer = stIt->second;
+            }
+
+            nlohmann::json playerJson;
+            playerJson["userId"] = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
+            playerJson["username"] = "Player-" + std::to_string(reinterpret_cast<uintptr_t>(playerConn));
+            playerJson["chips"] = stateForPlayer.chips;
+            playerJson["currentBet"] = stateForPlayer.currentBet;
+            playerJson["isFolded"] = stateForPlayer.isFolded;
+            playerJson["isAllIn"] = stateForPlayer.isAllIn;
+            playerJson["lastAction"] = stateForPlayer.lastAction;
+            playerJson["holeCards"] = nlohmann::json::array();
+
+            std::unordered_map<lpngx_connection_t,std::vector<std::string>>::const_iterator cardsIt = room->holeCards.find(playerConn);
+            if(cardsIt != room->holeCards.end())
+            {
+                for(std::size_t j = 0; j < cardsIt->second.size(); ++j)
+                {
+                    std::string rank;
+                    std::string suit;
+                    EncodeCard(cardsIt->second[j],rank,suit);
+
+                    nlohmann::json cardJson;
+                    cardJson["rank"] = rank;
+                    cardJson["suit"] = suit;
+                    playerJson["holeCards"].push_back(cardJson);
+                }
+            }
+
+            state["players"].push_back(playerJson);
+        }
+
+        roomStateJson = state.dump();
         playersSnapshot = room->players;
     }
 
