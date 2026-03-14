@@ -18,6 +18,9 @@ Every packet transmitted between the Client and Server consists of an 8-byte Hea
 ### Client to Server (CS)
 - `1001` : CS_JOIN_ROOM (Payload: { "roomId": 123, "token": "..." })
 - `2001` : CS_PLAYER_ACTION (Payload: { "action": "Call", "amount": 20 })
+- `2002` : CS_START_GAME (Payload: {})
+- `2003` : CS_LEAVE_ROOM (Payload: {})
+- `2004` : CS_RESET_CHIPS (Payload: {})
 
 ### Server to Client (SC)
 - `1002` : SC_JOIN_ROOM_RES (Payload: { "success": true, "message": "OK" })
