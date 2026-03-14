@@ -354,10 +354,6 @@ void CSocekt::msgSend(char *psendbuf)
     //总体数据并无风险，不会导致服务器崩溃，要看看个体数据，找一下恶意者了    
     LPSTRUC_MSG_HEADER pMsgHeader = (LPSTRUC_MSG_HEADER)psendbuf;
 	lpngx_connection_t p_Conn = pMsgHeader->pConn;
-    LPCOMM_PKG_HEADER pPkgHeader = (LPCOMM_PKG_HEADER)(psendbuf + m_iLenMsgHeader);
-    pPkgHeader->pkgLen = htonl(pPkgHeader->pkgLen);
-    pPkgHeader->msgCode = htonl(pPkgHeader->msgCode);
-
     if(p_Conn->iSendCount > 400)
     {
         //该用户收消息太慢【或者干脆不收消息】，累积的该用户的发送队列中有的数据条目数过大，认为是恶意用户，直接切断
@@ -671,7 +667,7 @@ void* CSocekt::ServerSendQueueThread(void* threadData)
     LPSTRUC_MSG_HEADER	pMsgHeader;
 	LPCOMM_PKG_HEADER   pPkgHeader;
     lpngx_connection_t  p_Conn;
-    uint32_t            itmp;
+    unsigned short      itmp;
     ssize_t             sendsize;  
 
     CMemory *p_memory = CMemory::GetInstance();
@@ -735,7 +731,7 @@ void* CSocekt::ServerSendQueueThread(void* threadData)
                 pSocketObj->m_MsgSendQueue.erase(pos2);
                 --pSocketObj->m_iSendMsgQueueCount;      //发送消息队列容量少1	
                 p_Conn->psendbuf = (char *)pPkgHeader;   //要发送的数据的缓冲区指针，因为发送数据不一定全部都能发送出去，我们要记录数据发送到了哪里，需要知道下次数据从哪里开始发送
-                itmp = ntohl(pPkgHeader->pkgLen);        //包头+包体长度在发送前已转为网络序，此处转回主机序得到长度；
+                itmp = ntohs(pPkgHeader->pkgLen);        //包头+包体 长度 ，打包时用了htons【本机序转网络序】，所以这里为了得到该数值，用了个ntohs【网络序转本机序】；
                 p_Conn->isendlen = itmp;                 //要发送多少数据，因为发送数据不一定全部都能发送出去，我们需要知道剩余有多少数据还没发送
                                 
 
