@@ -1454,6 +1454,16 @@ namespace BoardGameSimulator.Poker
                 return;
             }
 
+            if (SessionContext.CurrentRoomId > 0)
+            {
+                // 联机模式：由 C++ 服务端执行重置并广播最新状态 (MsgCode: 2004)
+                if (TcpNetworkManager.Instance != null && TcpNetworkManager.Instance.IsConnected)
+                {
+                    TcpNetworkManager.Instance.SendMessage(2004, "{}");
+                }
+                return;
+            }
+
             foreach (var player in _players)
             {
                 player.Chips = initialChips;
