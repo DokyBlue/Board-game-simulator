@@ -1333,6 +1333,37 @@ void CLogicSocket::CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room)
         return;
     }
 
+    if(activeCount == 1)
+    {
+        room->stage = "Showdown";
+        room->currentTurnUserId = 0;
+        room->isPlaying = false;
+        ResolveShowdown(room);
+        return; 
+    }
+
+    if(activeCount > 1 && !allMatched)
+    {
+        return;
+    }
+
+    // 2. 正常的阶段推进
+    if(room->stage == "Preflop") { /* 发3张代码不变 */ room->stage = "Flop"; }
+    else if(room->stage == "Flop") { /* 发1张代码不变 */ room->stage = "Turn"; }
+    else if(room->stage == "Turn") { /* 发1张代码不变 */ room->stage = "River"; }
+    else if(room->stage == "River")
+    {
+        room->stage = "Showdown";
+        room->currentTurnUserId = 0;
+        room->isPlaying = false; // 标记游戏结束
+        ResolveShowdown(room); // 调用裁判函数分发底池
+        return; // 【核心修复】：直接 return，千万不要往下执行重置 Waiting 的代码了！
+    }
+    else
+    {
+        return;
+    }
+
     room->maxBet = 0;
     room->currentTurnUserId = 0;
 

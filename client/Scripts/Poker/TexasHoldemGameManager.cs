@@ -299,6 +299,18 @@ namespace BoardGameSimulator.Poker
                 }
             }
 
+            if (state.stage == "Showdown")
+            {
+                _isWaitingForHostStart = true;
+                SetActionButtons(false); // 禁用底部的 Call/Raise/Fold 按钮
+                ToggleRoundChoiceButtons(SessionContext.IsRoomOwner); // 呼出下一局/重置按钮
+
+                if (stateText != null)
+                {
+                    stateText.text = SessionContext.IsRoomOwner ? "本局结束，请点击 Next Round" : "本局结束，等待房主开始下一局...";
+                }
+            }
+
             // 安全兜底：等人阶段可能还没有 players 数组
             if (state.players == null)
             {
