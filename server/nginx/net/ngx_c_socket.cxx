@@ -384,6 +384,8 @@ void CSocekt::msgSend(char *psendbuf)
 //这个函数是可能被多线程调用的，但是即便被多线程调用，也没关系，不影响本服务器程序的稳定性和正确运行性
 void CSocekt::zdClosesocketProc(lpngx_connection_t p_Conn)
 {
+    OnConnectionClosed(p_Conn);
+
     if(m_ifkickTimeCount == 1)
     {
         DeleteFromTimerQueue(p_Conn); //从时间队列中把连接干掉
@@ -399,6 +401,12 @@ void CSocekt::zdClosesocketProc(lpngx_connection_t p_Conn)
 
     inRecyConnectQueue(p_Conn);
     return;
+}
+
+
+void CSocekt::OnConnectionClosed(lpngx_connection_t p_Conn)
+{
+    (void)p_Conn;
 }
 
 //测试是否flood攻击成立，成立则返回true，否则返回false
