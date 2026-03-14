@@ -34,6 +34,27 @@ const pool = mysql.createPool({
 const roomEventStreams = new Map();
 const roomRuntimeState = new Map();
 
+// --- 新增：扑克牌工具 ---
+function createDeck() {
+  const suits = ['Hearts', 'Diamonds', 'Clubs', 'Spades'];
+  const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
+  let deck = [];
+  for (let s of suits) {
+    for (let r of ranks) {
+      deck.push({ suit: s, rank: r });
+    }
+  }
+  return deck;
+}
+
+function shuffle(deck) {
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+}
+// -------------------------
+
 function getRoomState(roomId) {
   const normalizedRoomId = Number(roomId);
   if (!roomRuntimeState.has(normalizedRoomId)) {
@@ -538,6 +559,28 @@ app.post('/lobby/rooms/:roomId/start', authRequired, async (req, res) => {
       roomState.started = true;
       roomState.startedAt = new Date().toISOString();
       await pool.query('UPDATE game_rooms SET started_at = ? WHERE id = ?', [roomState.startedAt, roomId]);
+      // --- [新增开始]：在服务器上初始化牌局 ---
+      let deck = createDeck();
+      shuffle(deck);
+      
+      // 获取当前房间的所有玩家
+      const members = await getRoomMembers(roomId);
+      
+      roomState.gameState = {
+        pot: 0,
+        communityCards: [],
+        stage: 'Preflop',
+        currentTurnUserId: members.length > 0 ? members[0].userId : 0, // 默认第一个人先行动
+        players: members.map(m => ({
+          userId: m.userId,
+          username: m.username,
+          chips: 2000,
+          currentBet: 0,
+          isFolded: false,
+          // 服务器发牌：每人两张
+          holeCards: [deck.pop(), deck.pop()] 
+        }))
+      };
     }
 
     await syncRoomState(roomId);
@@ -550,6 +593,78 @@ app.post('/lobby/rooms/:roomId/start', authRequired, async (req, res) => {
   } catch (error) {
     return res.status(500).json({ message: '开始游戏失败', detail: error.message });
   }
+});
+
+// --- 新增：供客户端轮询的牌桌同步接口 ---
+app.get('/lobby/rooms/:roomId/sync', authRequired, async (req, res) => {
+  const roomId = Number(req.params.roomId || 0);
+  const userId = req.user.uid;
+  
+  const roomState = getRoomState(roomId);
+  if (!roomState.started || !roomState.gameState) {
+    return res.json({ started: false });
+  }
+
+  // 核心安全逻辑：不能把别人的底牌发给当前客户端！
+  const safeState = JSON.parse(JSON.stringify(roomState.gameState));
+  safeState.players.forEach(p => {
+    if (p.userId !== userId) {
+      p.holeCards = []; // 隐藏其他玩家的底牌数据
+    }
+  });
+
+  return res.json({ started: true, state: safeState });
+});
+
+// --- 新增：处理玩家游戏动作接口 ---
+app.post('/lobby/rooms/:roomId/action', authRequired, async (req, res) => {
+  const roomId = Number(req.params.roomId || 0);
+  const userId = req.user.uid;
+  const { action, amount = 0 } = req.body; // action: 'Fold', 'Call', 'Raise', 'Check'
+
+  const roomState = getRoomState(roomId);
+  if (!roomState.started || !roomState.gameState) {
+    return res.status(400).json({ message: '游戏未开始' });
+  }
+
+  const gs = roomState.gameState;
+  
+  // 1. 检查是否轮到该玩家
+  if (gs.currentTurnUserId !== userId) {
+    return res.status(403).json({ message: '还没轮到你行动' });
+  }
+
+  const playerIndex = gs.players.findIndex(p => p.userId === userId);
+  const player = gs.players[playerIndex];
+
+  // 2. 根据动作更新玩家状态和底池
+  if (action === 'Fold') {
+    player.isFolded = true;
+  } else if (action === 'Call' || action === 'Check') {
+    // 简化处理：假设Call默认下注20
+    const callAmount = action === 'Call' ? 20 : 0; 
+    player.chips -= callAmount;
+    player.currentBet += callAmount;
+    gs.pot += callAmount;
+  } else if (action === 'Raise') {
+    const raiseAmount = Number(amount) > 0 ? Number(amount) : 40;
+    player.chips -= raiseAmount;
+    player.currentBet += raiseAmount;
+    gs.pot += raiseAmount;
+  }
+
+  // 3. 将行动权移交给下一个未弃牌的玩家
+  let nextIndex = (playerIndex + 1) % gs.players.length;
+  let loopCount = 0;
+  while (gs.players[nextIndex].isFolded && loopCount < gs.players.length) {
+    nextIndex = (nextIndex + 1) % gs.players.length;
+    loopCount++;
+  }
+  
+  // 如果所有人都弃牌了（这里可以加游戏结束结算逻辑，暂略）
+  gs.currentTurnUserId = gs.players[nextIndex].userId;
+
+  return res.json({ message: '操作成功' });
 });
 
 app.listen(Number(PORT), () => {
