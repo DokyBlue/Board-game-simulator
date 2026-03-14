@@ -356,13 +356,11 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
     }
 
     uint32_t roomId = 0;
-    uint64_t userId = 0;
     std::string username;
     try
     {
         nlohmann::json body = nlohmann::json::parse(std::string(pPkgBody,iBodyLength));
         roomId = body.at("roomId").get<uint32_t>();
-        userId = static_cast<uint64_t>(body.value<uint32_t>("userId",0));
         username = body.value<std::string>("username",std::string(""));
     }
     catch(...)
@@ -413,7 +411,7 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
         if(statsIt == room->playerStats.end())
         {
             GameRoom::PlayerStats stats;
-            stats.userId = (userId != 0) ? userId : static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pConn));
+            stats.userId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pConn));
             stats.username = username.empty() ? ("Player-" + std::to_string(stats.userId)) : username;
 
             std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(pConn);
@@ -429,10 +427,6 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
             if(!username.empty())
             {
                 statsIt->second.username = username;
-            }
-            if(userId != 0)
-            {
-                statsIt->second.userId = userId;
             }
 
             std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(pConn);
@@ -871,7 +865,7 @@ void CLogicSocket::OnConnectionClosed(lpngx_connection_t pConn)
                 }
                 else
                 {
-                    newOwnerUserId = GetPlayerUserId(room,room->owner);
+                    newOwnerUserId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(room->owner));
                 }
             }
             else
@@ -967,7 +961,7 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
                 stateForPlayer = stIt->second;
             }
 
-            uint64_t userId = GetPlayerUserId(room,playerConn);
+            uint64_t userId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
             std::string username = "Player-" + std::to_string(reinterpret_cast<uintptr_t>(playerConn));
             std::unordered_map<lpngx_connection_t,GameRoom::PlayerStats>::iterator statsIt = room->playerStats.find(playerConn);
             if(statsIt != room->playerStats.end())
