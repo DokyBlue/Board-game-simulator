@@ -364,6 +364,10 @@ void CSocekt::msgSend(char *psendbuf)
 		return;
     }
 
+    LPCOMM_PKG_HEADER pPkgHeader = (LPCOMM_PKG_HEADER)(psendbuf + m_iLenMsgHeader);
+    pPkgHeader->pkgLen = htonl(pPkgHeader->pkgLen);
+    pPkgHeader->msgCode = htonl(pPkgHeader->msgCode);
+
     ++p_Conn->iSendCount; //发送队列中有的数据条目数+1；
     m_MsgSendQueue.push_back(psendbuf);     
     ++m_iSendMsgQueueCount;   //原子操作
@@ -667,7 +671,7 @@ void* CSocekt::ServerSendQueueThread(void* threadData)
     LPSTRUC_MSG_HEADER	pMsgHeader;
 	LPCOMM_PKG_HEADER   pPkgHeader;
     lpngx_connection_t  p_Conn;
-    unsigned short      itmp;
+    uint32_t            itmp;
     ssize_t             sendsize;  
 
     CMemory *p_memory = CMemory::GetInstance();
@@ -731,7 +735,7 @@ void* CSocekt::ServerSendQueueThread(void* threadData)
                 pSocketObj->m_MsgSendQueue.erase(pos2);
                 --pSocketObj->m_iSendMsgQueueCount;      //发送消息队列容量少1	
                 p_Conn->psendbuf = (char *)pPkgHeader;   //要发送的数据的缓冲区指针，因为发送数据不一定全部都能发送出去，我们要记录数据发送到了哪里，需要知道下次数据从哪里开始发送
-                itmp = ntohs(pPkgHeader->pkgLen);        //包头+包体 长度 ，打包时用了htons【本机序转网络序】，所以这里为了得到该数值，用了个ntohs【网络序转本机序】；
+                itmp = ntohl(pPkgHeader->pkgLen);        //包头+包体 长度 ，打包时用了htons【本机序转网络序】，所以这里为了得到该数值，用了个ntohs【网络序转本机序】；
                 p_Conn->isendlen = itmp;                 //要发送多少数据，因为发送数据不一定全部都能发送出去，我们需要知道剩余有多少数据还没发送
                                 
 
