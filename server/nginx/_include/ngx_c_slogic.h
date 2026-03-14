@@ -12,16 +12,29 @@
 
 struct GameRoom
 {
+    struct PlayerState
+    {
+        int chips;
+        int currentBet;
+        bool isFolded;
+        bool isAllIn;
+        std::string lastAction;
+
+        PlayerState() : chips(2000), currentBet(0), isFolded(false), isAllIn(false), lastAction("Waiting") {}
+    };
+
     mutable std::shared_mutex roomMutex;
     std::vector<lpngx_connection_t> players;
     uint32_t pot;
+    uint32_t maxBet;
     std::string stage;
     bool isPlaying;
     uint64_t currentTurnUserId;
     std::vector<std::string> communityCards;
     std::unordered_map<lpngx_connection_t,std::vector<std::string>> holeCards;
+    std::unordered_map<lpngx_connection_t,PlayerState> playerStates;
 
-    GameRoom() : pot(0), stage("Waiting"), isPlaying(false), currentTurnUserId(0) {}
+    GameRoom() : pot(0), maxBet(0), stage("Waiting"), isPlaying(false), currentTurnUserId(0) {}
 };
 
 class CLogicSocket : public CSocekt   //继承自父类CScoekt
