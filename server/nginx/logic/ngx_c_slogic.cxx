@@ -18,6 +18,7 @@
 #include <sstream>
 #include <mutex>
 #include <cctype>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -103,6 +104,340 @@ uint64_t GetPlayerUserId(const std::shared_ptr<GameRoom> &room,lpngx_connection_
 
     return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
 }
+
+
+int EstimateHoleStrength(const std::vector<std::string> &holeCards)
+{
+    if(holeCards.size() < 2)
+    {
+        return 1;
+    }
+
+    auto rankValue = [](const std::string &card)->int
+    {
+        if(card.empty()) return 2;
+        char r = card[0];
+        if(r >= '2' && r <= '9') return r - '0';
+        if(r == 'T') return 10;
+        if(r == 'J') return 11;
+        if(r == 'Q') return 12;
+        if(r == 'K') return 13;
+        if(r == 'A') return 14;
+        return 2;
+    };
+
+    int r1 = rankValue(holeCards[0]);
+    int r2 = rankValue(holeCards[1]);
+    int high = std::max(r1,r2);
+
+    if(r1 == r2 && high >= 10) return 4;
+    if(r1 == r2) return 3;
+    if(high >= 13) return 3;
+    if(high >= 10) return 2;
+    return 1;
+}
+
+int ComputeBotRaise(const GameRoom::BotPlayer &bot,uint32_t maxBet)
+{
+    int strength = EstimateHoleStrength(bot.holeCards);
+    int toCall = static_cast<int>(maxBet) - bot.state.currentBet;
+    if(toCall < 0) toCall = 0;
+
+    int base = 20;
+    if(bot.style == 2) base = 40;
+    else if(bot.style == 3) base = 30;
+
+    return std::max(toCall + base * strength, toCall);
+}
+
+
+int RankFromCardCode(const std::string &cardCode)
+{
+    if(cardCode.empty())
+    {
+        return 2;
+    }
+
+    char rankCode = cardCode[0];
+    if(rankCode >= '2' && rankCode <= '9') return rankCode - '0';
+    if(rankCode == 'T') return 10;
+    if(rankCode == 'J') return 11;
+    if(rankCode == 'Q') return 12;
+    if(rankCode == 'K') return 13;
+    if(rankCode == 'A') return 14;
+    return 2;
+}
+
+int SuitFromCardCode(const std::string &cardCode)
+{
+    if(cardCode.size() < 2)
+    {
+        return 0;
+    }
+
+    std::string suitPart;
+    if(cardCode.size() >= 2 && cardCode[1] == '0')
+    {
+        suitPart = cardCode.substr(2);
+    }
+    else
+    {
+        suitPart = cardCode.substr(1);
+    }
+
+    if(suitPart == "Clubs") return 1;
+    if(suitPart == "Diamonds") return 2;
+    if(suitPart == "Hearts") return 3;
+    if(suitPart == "Spades") return 4;
+    return 0;
+}
+
+struct EvaluatedFiveCardHand
+{
+    int category;
+    std::vector<int> tiebreak;
+
+    EvaluatedFiveCardHand() : category(0), tiebreak() {}
+};
+
+bool IsBetterHand(const EvaluatedFiveCardHand &lhs,const EvaluatedFiveCardHand &rhs)
+{
+    if(lhs.category != rhs.category)
+    {
+        return lhs.category > rhs.category;
+    }
+
+    std::size_t n = std::min(lhs.tiebreak.size(),rhs.tiebreak.size());
+    for(std::size_t i = 0; i < n; ++i)
+    {
+        if(lhs.tiebreak[i] != rhs.tiebreak[i])
+        {
+            return lhs.tiebreak[i] > rhs.tiebreak[i];
+        }
+    }
+
+    return lhs.tiebreak.size() > rhs.tiebreak.size();
+}
+
+bool IsEqualHand(const EvaluatedFiveCardHand &lhs,const EvaluatedFiveCardHand &rhs)
+{
+    return lhs.category == rhs.category && lhs.tiebreak == rhs.tiebreak;
+}
+
+EvaluatedFiveCardHand EvaluateFiveCards(const std::vector<std::string> &cards)
+{
+    EvaluatedFiveCardHand result;
+    if(cards.size() != 5)
+    {
+        return result;
+    }
+
+    int rankCount[15] = {0};
+    int suitCount[5] = {0};
+    std::vector<int> ranks;
+    ranks.reserve(5);
+
+    for(std::size_t i = 0; i < cards.size(); ++i)
+    {
+        int rank = RankFromCardCode(cards[i]);
+        int suit = SuitFromCardCode(cards[i]);
+        rankCount[rank] += 1;
+        if(suit >= 0 && suit < 5)
+        {
+            suitCount[suit] += 1;
+        }
+        ranks.push_back(rank);
+    }
+
+    bool isFlush = false;
+    for(int s = 1; s <= 4; ++s)
+    {
+        if(suitCount[s] == 5)
+        {
+            isFlush = true;
+            break;
+        }
+    }
+
+    std::set<int> uniqSet(ranks.begin(),ranks.end());
+    std::vector<int> uniq(uniqSet.begin(),uniqSet.end());
+    std::sort(uniq.begin(),uniq.end());
+
+    int straightHigh = 0;
+    if(uniq.size() == 5)
+    {
+        bool consecutive = true;
+        for(std::size_t i = 1; i < uniq.size(); ++i)
+        {
+            if(uniq[i] != uniq[i-1] + 1)
+            {
+                consecutive = false;
+                break;
+            }
+        }
+
+        if(consecutive)
+        {
+            straightHigh = uniq.back();
+        }
+        else if(uniq[0] == 2 && uniq[1] == 3 && uniq[2] == 4 && uniq[3] == 5 && uniq[4] == 14)
+        {
+            straightHigh = 5;
+        }
+    }
+
+    std::vector<std::pair<int,int> > groups;
+    for(int r = 14; r >= 2; --r)
+    {
+        if(rankCount[r] > 0)
+        {
+            groups.push_back(std::make_pair(rankCount[r],r));
+        }
+    }
+
+    std::sort(groups.begin(),groups.end(),[](const std::pair<int,int> &a,const std::pair<int,int> &b)
+    {
+        if(a.first != b.first)
+        {
+            return a.first > b.first;
+        }
+        return a.second > b.second;
+    });
+
+    if(isFlush && straightHigh > 0)
+    {
+        result.category = (straightHigh == 14 ? 10 : 9); // Royal Flush : Straight Flush
+        result.tiebreak.push_back(straightHigh);
+        return result;
+    }
+
+    if(groups[0].first == 4)
+    {
+        result.category = 8;
+        result.tiebreak.push_back(groups[0].second);
+        for(std::size_t i = 1; i < groups.size(); ++i)
+        {
+            if(groups[i].first == 1)
+            {
+                result.tiebreak.push_back(groups[i].second);
+                break;
+            }
+        }
+        return result;
+    }
+
+    if(groups[0].first == 3 && groups.size() > 1 && groups[1].first >= 2)
+    {
+        result.category = 7;
+        result.tiebreak.push_back(groups[0].second);
+        result.tiebreak.push_back(groups[1].second);
+        return result;
+    }
+
+    if(isFlush)
+    {
+        result.category = 6;
+        std::sort(ranks.begin(),ranks.end(),std::greater<int>());
+        result.tiebreak = ranks;
+        return result;
+    }
+
+    if(straightHigh > 0)
+    {
+        result.category = 5;
+        result.tiebreak.push_back(straightHigh);
+        return result;
+    }
+
+    if(groups[0].first == 3)
+    {
+        result.category = 4;
+        result.tiebreak.push_back(groups[0].second);
+        for(std::size_t i = 1; i < groups.size(); ++i)
+        {
+            if(groups[i].first == 1)
+            {
+                result.tiebreak.push_back(groups[i].second);
+            }
+        }
+        return result;
+    }
+
+    if(groups[0].first == 2 && groups.size() > 1 && groups[1].first == 2)
+    {
+        result.category = 3;
+        result.tiebreak.push_back(std::max(groups[0].second,groups[1].second));
+        result.tiebreak.push_back(std::min(groups[0].second,groups[1].second));
+        for(std::size_t i = 2; i < groups.size(); ++i)
+        {
+            if(groups[i].first == 1)
+            {
+                result.tiebreak.push_back(groups[i].second);
+                break;
+            }
+        }
+        return result;
+    }
+
+    if(groups[0].first == 2)
+    {
+        result.category = 2;
+        result.tiebreak.push_back(groups[0].second);
+        for(std::size_t i = 1; i < groups.size(); ++i)
+        {
+            if(groups[i].first == 1)
+            {
+                result.tiebreak.push_back(groups[i].second);
+            }
+        }
+        return result;
+    }
+
+    result.category = 1;
+    std::sort(ranks.begin(),ranks.end(),std::greater<int>());
+    result.tiebreak = ranks;
+    return result;
+}
+
+EvaluatedFiveCardHand EvaluateSevenCards(const std::vector<std::string> &cards)
+{
+    EvaluatedFiveCardHand best;
+    if(cards.size() < 5)
+    {
+        return best;
+    }
+
+    for(std::size_t a = 0; a < cards.size() - 4; ++a)
+    {
+        for(std::size_t b = a + 1; b < cards.size() - 3; ++b)
+        {
+            for(std::size_t c = b + 1; c < cards.size() - 2; ++c)
+            {
+                for(std::size_t d = c + 1; d < cards.size() - 1; ++d)
+                {
+                    for(std::size_t e = d + 1; e < cards.size(); ++e)
+                    {
+                        std::vector<std::string> five;
+                        five.reserve(5);
+                        five.push_back(cards[a]);
+                        five.push_back(cards[b]);
+                        five.push_back(cards[c]);
+                        five.push_back(cards[d]);
+                        five.push_back(cards[e]);
+
+                        EvaluatedFiveCardHand current = EvaluateFiveCards(five);
+                        if(best.category == 0 || IsBetterHand(current,best))
+                        {
+                            best = current;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return best;
+}
 } // namespace
 
 std::vector<std::string> GenerateShuffledDeck()
@@ -153,6 +488,7 @@ bool CLogicSocket::Initialize()
     m_statusHandler[1001] = &CLogicSocket::_HandleJoinRoom;
     m_statusHandler[2002] = &CLogicSocket::_HandleStartGame;
     m_statusHandler[2001] = &CLogicSocket::_HandleGameAction;
+    m_statusHandler[2003] = &CLogicSocket::_HandleLeaveRoom;
     m_statusHandler[2004] = &CLogicSocket::_HandleResetChips;
 
     bool bParentInit = CSocekt::Initialize();  //调用父类的同名函数
@@ -616,42 +952,12 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
             player.lastAction = "Fold";
         }
 
-        room->currentTurnUserId = 0;
-        if(!room->players.empty())
-        {
-            std::size_t currentIndex = 0;
-            bool foundCurrent = false;
-            for(std::size_t i = 0; i < room->players.size(); ++i)
-            {
-                if(room->players[i] == pConn)
-                {
-                    currentIndex = i;
-                    foundCurrent = true;
-                    break;
-                }
-            }
-
-            std::size_t startIndex = foundCurrent ? currentIndex : 0;
-            for(std::size_t step = 1; step <= room->players.size(); ++step)
-            {
-                std::size_t nextIndex = (startIndex + step) % room->players.size();
-                lpngx_connection_t candidateConn = room->players[nextIndex];
-                if(candidateConn == NULL)
-                {
-                    continue;
-                }
-
-                std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator candidateStateIt = room->playerStates.find(candidateConn);
-                if(candidateStateIt != room->playerStates.end() && IsActivePlayer(candidateStateIt->second))
-                {
-                    room->currentTurnUserId = GetPlayerUserId(room,candidateConn);
-                    break;
-                }
-            }
-        }
+        AdvanceTurn(room,GetPlayerUserId(room,pConn));
+        CheckAndAdvanceStage(room);
     }
 
     BroadcastGameState(roomId,room);
+    RunBotTurns(roomId,room);
     return true;
 }
 
@@ -693,7 +999,7 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
             return false;
         }
 
-        std::vector<std::string> deck = GenerateShuffledDeck();
+        room->deck = GenerateShuffledDeck();
 
         room->isPlaying = true;
         room->pot = 0;
@@ -713,23 +1019,46 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
         for(std::size_t i = 0; i < room->players.size(); ++i)
         {
             lpngx_connection_t playerConn = room->players[i];
-            if(playerConn == NULL || deck.size() < 2)
+            if(playerConn == NULL || room->deck.size() < 2)
             {
                 continue;
             }
 
             std::vector<std::string> cards;
-            cards.push_back(deck.back());
-            deck.pop_back();
-            cards.push_back(deck.back());
-            deck.pop_back();
+            cards.push_back(room->deck.back());
+            room->deck.pop_back();
+            cards.push_back(room->deck.back());
+            room->deck.pop_back();
 
             room->holeCards[playerConn] = cards;
+        }
+
+        FillBotsForRoom(roomId,room);
+        for(std::size_t i = 0; i < room->bots.size(); ++i)
+        {
+            if(room->deck.size() < 2)
+            {
+                break;
+            }
+
+            room->bots[i].state.currentBet = 0;
+            room->bots[i].state.isFolded = false;
+            room->bots[i].state.isAllIn = false;
+            room->bots[i].state.lastAction = "Waiting";
+            room->bots[i].holeCards.clear();
+            room->bots[i].holeCards.push_back(room->deck.back());
+            room->deck.pop_back();
+            room->bots[i].holeCards.push_back(room->deck.back());
+            room->deck.pop_back();
         }
 
         if(!room->players.empty() && room->players[0] != NULL)
         {
             room->currentTurnUserId = GetPlayerUserId(room,room->players[0]);
+        }
+        else if(!room->bots.empty())
+        {
+            room->currentTurnUserId = room->bots[0].userId;
         }
         else
         {
@@ -738,6 +1067,7 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
     }
 
     BroadcastGameState(roomId,room);
+    RunBotTurns(roomId,room);
     return true;
 }
 
@@ -792,7 +1122,9 @@ bool CLogicSocket::_HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
         room->maxBet = 0;
         room->stage = "Preflop";
         room->communityCards.clear();
+        room->deck.clear();
         room->holeCards.clear();
+        room->bots.clear();
         room->isPlaying = false;
         room->currentTurnUserId = 0;
     }
@@ -801,6 +1133,42 @@ bool CLogicSocket::_HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
     return true;
 }
 
+
+bool CLogicSocket::_HandleLeaveRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength)
+{
+    (void)pMsgHeader;
+    (void)pPkgBody;
+    (void)iBodyLength;
+
+    uint32_t roomId = 0;
+    std::vector<lpngx_connection_t> roomPlayers;
+    {
+        std::unique_lock<std::shared_mutex> roomMapLock(m_roomMapMutex);
+        std::unordered_map<lpngx_connection_t,uint32_t>::iterator connIt = m_connRoomMap.find(pConn);
+        if(connIt == m_connRoomMap.end())
+        {
+            return false;
+        }
+
+        roomId = connIt->second;
+        std::unordered_map<uint32_t,std::shared_ptr<GameRoom>>::iterator roomIt = m_gameRooms.find(roomId);
+        if(roomIt != m_gameRooms.end() && roomIt->second != NULL)
+        {
+            roomPlayers = roomIt->second->players;
+            for(std::size_t i = 0; i < roomPlayers.size(); ++i)
+            {
+                m_connRoomMap.erase(roomPlayers[i]);
+            }
+            m_gameRooms.erase(roomIt);
+        }
+        else
+        {
+            m_connRoomMap.erase(connIt);
+        }
+    }
+
+    return true;
+}
 
 void CLogicSocket::OnConnectionClosed(lpngx_connection_t pConn)
 {
@@ -980,6 +1348,7 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
             playerJson["isFolded"] = stateForPlayer.isFolded;
             playerJson["isAllIn"] = stateForPlayer.isAllIn;
             playerJson["lastAction"] = stateForPlayer.lastAction;
+            playerJson["isBot"] = false;
             playerJson["holeCards"] = nlohmann::json::array();
 
             std::unordered_map<lpngx_connection_t,std::vector<std::string>>::const_iterator cardsIt = room->holeCards.find(playerConn);
@@ -1001,6 +1370,37 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
             state["players"].push_back(playerJson);
         }
 
+        for(std::size_t i = 0; i < room->bots.size(); ++i)
+        {
+            const GameRoom::BotPlayer &bot = room->bots[i];
+
+            nlohmann::json playerJson;
+            playerJson["userId"] = bot.userId;
+            playerJson["username"] = bot.username;
+            playerJson["chips"] = bot.state.chips;
+            playerJson["isOwner"] = false;
+            playerJson["currentBet"] = bot.state.currentBet;
+            playerJson["isFolded"] = bot.state.isFolded;
+            playerJson["isAllIn"] = bot.state.isAllIn;
+            playerJson["lastAction"] = bot.state.lastAction;
+            playerJson["isBot"] = true;
+            playerJson["holeCards"] = nlohmann::json::array();
+
+            for(std::size_t j = 0; j < bot.holeCards.size(); ++j)
+            {
+                std::string rank;
+                std::string suit;
+                EncodeCard(bot.holeCards[j],rank,suit);
+
+                nlohmann::json cardJson;
+                cardJson["rank"] = rank;
+                cardJson["suit"] = suit;
+                playerJson["holeCards"].push_back(cardJson);
+            }
+
+            state["players"].push_back(playerJson);
+        }
+
         roomStateJson = state.dump();
         playersSnapshot = room->players;
     }
@@ -1017,5 +1417,497 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
         msgHeader.pConn = playerConn;
         msgHeader.iCurrsequence = playerConn->iCurrsequence;
         SendJsonPkgToClient(&msgHeader,3001,roomStateJson);
+    }
+}
+
+void CLogicSocket::FillBotsForRoom(uint32_t roomId,const std::shared_ptr<GameRoom> &room)
+{
+    if(room == NULL)
+    {
+        return;
+    }
+
+    const std::size_t humanCount = room->players.size();
+    const std::size_t targetBots = humanCount >= 6 ? 0 : (6 - humanCount);
+    room->bots.clear();
+
+    for(std::size_t i = 0; i < targetBots; ++i)
+    {
+        GameRoom::BotPlayer bot;
+        bot.userId = static_cast<uint64_t>(roomId) * 1000ULL + static_cast<uint64_t>(i + 1);
+        bot.username = "Bot-" + std::to_string(i + 1);
+        bot.state = GameRoom::PlayerState();
+        bot.style = static_cast<int>(i % 4);
+        room->bots.push_back(bot);
+    }
+}
+
+void CLogicSocket::AdvanceTurn(const std::shared_ptr<GameRoom> &room,uint64_t currentUserId)
+{
+    if(room == NULL)
+    {
+        return;
+    }
+
+    std::vector<uint64_t> order;
+    order.reserve(room->players.size() + room->bots.size());
+
+    for(std::size_t i = 0; i < room->players.size(); ++i)
+    {
+        lpngx_connection_t conn = room->players[i];
+        if(conn == NULL)
+        {
+            continue;
+        }
+
+        uint64_t uid = GetPlayerUserId(room,conn);
+        if(uid != 0)
+        {
+            order.push_back(uid);
+        }
+    }
+
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        order.push_back(room->bots[i].userId);
+    }
+
+    if(order.empty())
+    {
+        room->currentTurnUserId = 0;
+        return;
+    }
+
+    std::size_t startIndex = 0;
+    for(std::size_t i = 0; i < order.size(); ++i)
+    {
+        if(order[i] == currentUserId)
+        {
+            startIndex = i;
+            break;
+        }
+    }
+
+    room->currentTurnUserId = 0;
+    for(std::size_t step = 1; step <= order.size(); ++step)
+    {
+        std::size_t idx = (startIndex + step) % order.size();
+        uint64_t uid = order[idx];
+
+        bool active = false;
+        for(std::size_t h = 0; h < room->players.size(); ++h)
+        {
+            lpngx_connection_t conn = room->players[h];
+            if(conn == NULL || GetPlayerUserId(room,conn) != uid)
+            {
+                continue;
+            }
+
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(conn);
+            if(stateIt != room->playerStates.end() && IsActivePlayer(stateIt->second))
+            {
+                active = true;
+            }
+            break;
+        }
+
+        if(!active)
+        {
+            for(std::size_t b = 0; b < room->bots.size(); ++b)
+            {
+                if(room->bots[b].userId == uid)
+                {
+                    active = IsActivePlayer(room->bots[b].state);
+                    break;
+                }
+            }
+        }
+
+        if(active)
+        {
+            room->currentTurnUserId = uid;
+            return;
+        }
+    }
+}
+
+void CLogicSocket::CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room)
+{
+    if(room == NULL)
+    {
+        return;
+    }
+
+    int activeCount = 0;
+    bool allMatched = true;
+
+    for(std::size_t i = 0; i < room->players.size(); ++i)
+    {
+        lpngx_connection_t conn = room->players[i];
+        if(conn == NULL)
+        {
+            continue;
+        }
+
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.find(conn);
+        if(it == room->playerStates.end())
+        {
+            continue;
+        }
+
+        if(!IsActivePlayer(it->second))
+        {
+            continue;
+        }
+
+        ++activeCount;
+        if(it->second.lastAction == "Waiting" || static_cast<uint32_t>(it->second.currentBet) != room->maxBet)
+        {
+            allMatched = false;
+        }
+    }
+
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        GameRoom::BotPlayer &bot = room->bots[i];
+        if(!IsActivePlayer(bot.state))
+        {
+            continue;
+        }
+
+        ++activeCount;
+        if(bot.state.lastAction == "Waiting" || static_cast<uint32_t>(bot.state.currentBet) != room->maxBet)
+        {
+            allMatched = false;
+        }
+    }
+
+    if(activeCount > 1 && !allMatched)
+    {
+        return;
+    }
+
+    if(room->stage == "Preflop")
+    {
+        for(int i = 0; i < 3 && !room->deck.empty(); ++i)
+        {
+            room->communityCards.push_back(room->deck.back());
+            room->deck.pop_back();
+        }
+        room->stage = "Flop";
+    }
+    else if(room->stage == "Flop")
+    {
+        if(!room->deck.empty())
+        {
+            room->communityCards.push_back(room->deck.back());
+            room->deck.pop_back();
+        }
+        room->stage = "Turn";
+    }
+    else if(room->stage == "Turn")
+    {
+        if(!room->deck.empty())
+        {
+            room->communityCards.push_back(room->deck.back());
+            room->deck.pop_back();
+        }
+        room->stage = "River";
+    }
+    else if(room->stage == "River")
+    {
+        room->stage = "Showdown";
+        room->maxBet = 0;
+        room->currentTurnUserId = 0;
+        ResolveShowdown(room);
+        room->isPlaying = false;
+        return;
+    }
+    else
+    {
+        return;
+    }
+
+    room->maxBet = 0;
+    room->currentTurnUserId = 0;
+
+    for(std::size_t i = 0; i < room->players.size(); ++i)
+    {
+        lpngx_connection_t conn = room->players[i];
+        if(conn == NULL)
+        {
+            continue;
+        }
+
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.find(conn);
+        if(it == room->playerStates.end() || !IsActivePlayer(it->second))
+        {
+            continue;
+        }
+
+        it->second.currentBet = 0;
+        it->second.lastAction = "Waiting";
+
+        if(room->currentTurnUserId == 0)
+        {
+            room->currentTurnUserId = GetPlayerUserId(room,conn);
+        }
+    }
+
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        GameRoom::BotPlayer &bot = room->bots[i];
+        if(!IsActivePlayer(bot.state))
+        {
+            continue;
+        }
+
+        bot.state.currentBet = 0;
+        bot.state.lastAction = "Waiting";
+
+        if(room->currentTurnUserId == 0)
+        {
+            room->currentTurnUserId = bot.userId;
+        }
+    }
+}
+
+
+void CLogicSocket::ResolveShowdown(const std::shared_ptr<GameRoom> &room)
+{
+    if(room == NULL)
+    {
+        return;
+    }
+
+    struct Contender
+    {
+        bool isBot;
+        lpngx_connection_t conn;
+        std::size_t botIndex;
+        GameRoom::PlayerState *state;
+        std::vector<std::string> cards;
+        EvaluatedFiveCardHand hand;
+
+        Contender() : isBot(false), conn(NULL), botIndex(0), state(NULL), cards(), hand() {}
+    };
+
+    std::vector<Contender> contenders;
+
+    for(std::size_t i = 0; i < room->players.size(); ++i)
+    {
+        lpngx_connection_t conn = room->players[i];
+        if(conn == NULL)
+        {
+            continue;
+        }
+
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator stateIt = room->playerStates.find(conn);
+        if(stateIt == room->playerStates.end() || stateIt->second.isFolded)
+        {
+            continue;
+        }
+
+        std::unordered_map<lpngx_connection_t,std::vector<std::string> >::const_iterator holeIt = room->holeCards.find(conn);
+
+        Contender contender;
+        contender.isBot = false;
+        contender.conn = conn;
+        contender.state = &stateIt->second;
+        if(holeIt != room->holeCards.end())
+        {
+            contender.cards.insert(contender.cards.end(),holeIt->second.begin(),holeIt->second.end());
+        }
+        contender.cards.insert(contender.cards.end(),room->communityCards.begin(),room->communityCards.end());
+        contenders.push_back(contender);
+    }
+
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        GameRoom::BotPlayer &bot = room->bots[i];
+        if(bot.state.isFolded)
+        {
+            continue;
+        }
+
+        Contender contender;
+        contender.isBot = true;
+        contender.botIndex = i;
+        contender.state = &bot.state;
+        contender.cards.insert(contender.cards.end(),bot.holeCards.begin(),bot.holeCards.end());
+        contender.cards.insert(contender.cards.end(),room->communityCards.begin(),room->communityCards.end());
+        contenders.push_back(contender);
+    }
+
+    if(contenders.empty())
+    {
+        room->pot = 0;
+        return;
+    }
+
+    if(contenders.size() == 1)
+    {
+        contenders[0].state->chips += static_cast<int>(room->pot);
+        room->pot = 0;
+
+        for(std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.begin(); it != room->playerStates.end(); ++it)
+        {
+            it->second.lastAction = (it->second.isFolded ? "Loser" : "Winner");
+        }
+        for(std::size_t i = 0; i < room->bots.size(); ++i)
+        {
+            room->bots[i].state.lastAction = (room->bots[i].state.isFolded ? "Loser" : "Winner");
+        }
+        return;
+    }
+
+    for(std::size_t i = 0; i < contenders.size(); ++i)
+    {
+        contenders[i].hand = EvaluateSevenCards(contenders[i].cards);
+    }
+
+    EvaluatedFiveCardHand best = contenders[0].hand;
+    for(std::size_t i = 1; i < contenders.size(); ++i)
+    {
+        if(IsBetterHand(contenders[i].hand,best))
+        {
+            best = contenders[i].hand;
+        }
+    }
+
+    std::vector<std::size_t> winners;
+    for(std::size_t i = 0; i < contenders.size(); ++i)
+    {
+        if(IsEqualHand(contenders[i].hand,best))
+        {
+            winners.push_back(i);
+        }
+    }
+
+    if(winners.empty())
+    {
+        room->pot = 0;
+        return;
+    }
+
+    int totalPot = static_cast<int>(room->pot);
+    int share = totalPot / static_cast<int>(winners.size());
+    int remainder = totalPot % static_cast<int>(winners.size());
+
+    for(std::size_t i = 0; i < winners.size(); ++i)
+    {
+        int gain = share + (i < static_cast<std::size_t>(remainder) ? 1 : 0);
+        contenders[winners[i]].state->chips += gain;
+    }
+
+    room->pot = 0;
+
+    for(std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.begin(); it != room->playerStates.end(); ++it)
+    {
+        it->second.lastAction = "Loser";
+    }
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        room->bots[i].state.lastAction = "Loser";
+    }
+
+    for(std::size_t i = 0; i < winners.size(); ++i)
+    {
+        contenders[winners[i]].state->lastAction = "Winner";
+    }
+}
+
+void CLogicSocket::RunBotTurns(uint32_t roomId,const std::shared_ptr<GameRoom> &room)
+{
+    if(room == NULL)
+    {
+        return;
+    }
+
+    for(int round = 0; round < 12; ++round)
+    {
+        bool acted = false;
+        {
+            std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
+            uint64_t turnUserId = room->currentTurnUserId;
+            if(turnUserId == 0)
+            {
+                return;
+            }
+
+            for(std::size_t i = 0; i < room->bots.size(); ++i)
+            {
+                GameRoom::BotPlayer &bot = room->bots[i];
+                if(bot.userId != turnUserId)
+                {
+                    continue;
+                }
+
+                if(!IsActivePlayer(bot.state))
+                {
+                    AdvanceTurn(room,bot.userId);
+                    acted = true;
+                    break;
+                }
+
+                int toCall = static_cast<int>(room->maxBet) - bot.state.currentBet;
+                if(toCall < 0)
+                {
+                    toCall = 0;
+                }
+
+                int strength = EstimateHoleStrength(bot.holeCards);
+                if(bot.state.chips <= 0)
+                {
+                    bot.state.isAllIn = true;
+                    bot.state.lastAction = "AllIn";
+                }
+                else if(strength <= 1 && toCall > bot.state.chips / 3)
+                {
+                    bot.state.isFolded = true;
+                    bot.state.lastAction = "Fold";
+                }
+                else if(strength >= 3 && bot.state.chips > toCall + 20)
+                {
+                    int paid = std::min(bot.state.chips,ComputeBotRaise(bot,room->maxBet));
+                    bot.state.chips -= paid;
+                    bot.state.currentBet += paid;
+                    room->pot += static_cast<uint32_t>(paid);
+                    if(static_cast<uint32_t>(bot.state.currentBet) > room->maxBet)
+                    {
+                        room->maxBet = static_cast<uint32_t>(bot.state.currentBet);
+                    }
+                    bot.state.lastAction = "Raise";
+                    if(bot.state.chips == 0)
+                    {
+                        bot.state.isAllIn = true;
+                    }
+                }
+                else
+                {
+                    int paid = std::min(bot.state.chips,toCall);
+                    bot.state.chips -= paid;
+                    bot.state.currentBet += paid;
+                    room->pot += static_cast<uint32_t>(paid);
+                    bot.state.lastAction = (toCall == 0 ? "Check" : "Call");
+                    if(bot.state.chips == 0)
+                    {
+                        bot.state.isAllIn = true;
+                    }
+                }
+
+                AdvanceTurn(room,bot.userId);
+                CheckAndAdvanceStage(room);
+                acted = true;
+                break;
+            }
+        }
+
+        if(!acted)
+        {
+            return;
+        }
+
+        BroadcastGameState(roomId,room);
     }
 }

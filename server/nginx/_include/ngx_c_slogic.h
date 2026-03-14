@@ -41,9 +41,22 @@ struct GameRoom
     bool isPlaying;
     uint64_t currentTurnUserId;
     std::vector<std::string> communityCards;
+    std::vector<std::string> deck;
     std::unordered_map<lpngx_connection_t,std::vector<std::string>> holeCards;
     std::unordered_map<lpngx_connection_t,PlayerState> playerStates;
+    struct BotPlayer
+    {
+        uint64_t userId;
+        std::string username;
+        PlayerState state;
+        std::vector<std::string> holeCards;
+        int style;
+
+        BotPlayer() : userId(0), username(""), state(), holeCards(), style(0) {}
+    };
+
     std::unordered_map<lpngx_connection_t,PlayerStats> playerStats;
+    std::vector<BotPlayer> bots;
 
     GameRoom() : owner(NULL), pot(0), maxBet(0), stage("Waiting"), isPlaying(false), currentTurnUserId(0) {}
 };
@@ -68,6 +81,7 @@ public:
 	bool _HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
+	bool _HandleLeaveRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 
 	virtual void procPingTimeOutChecking(LPSTRUC_MSG_HEADER tmpmsg,time_t cur_time);      //心跳包检测时间到，该去检测心跳包是否超时的事宜，本函数只是把内存释放，子类应该重新事先该函数以实现具体的判断动作
 
@@ -80,6 +94,11 @@ protected:
 private:
 	void SendJsonPkgToClient(LPSTRUC_MSG_HEADER pMsgHeader,unsigned short iMsgCode,const std::string &jsonPayload);
 	void BroadcastGameState(uint32_t roomId,const std::shared_ptr<GameRoom> &room);
+	void FillBotsForRoom(uint32_t roomId,const std::shared_ptr<GameRoom> &room);
+	void AdvanceTurn(const std::shared_ptr<GameRoom> &room,uint64_t currentUserId);
+	void RunBotTurns(uint32_t roomId,const std::shared_ptr<GameRoom> &room);
+	void CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room);
+	void ResolveShowdown(const std::shared_ptr<GameRoom> &room);
 
 private:
 	std::unordered_map<uint32_t,std::shared_ptr<GameRoom>> m_gameRooms;
