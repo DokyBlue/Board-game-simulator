@@ -313,6 +313,7 @@ namespace BoardGameSimulator.Poker
                 {
                     tableMaxBet = Mathf.Max(tableMaxBet, state.players[i].currentBet);
                 }
+                return;
             }
 
             bool foundLocalPlayer = false;
