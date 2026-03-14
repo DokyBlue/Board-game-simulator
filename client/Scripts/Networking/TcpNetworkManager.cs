@@ -130,6 +130,9 @@ namespace BoardGameSimulator.Networking
                 return;
             }
 
+            // 新增日志，拦截所有发往 C++ 的数据
+            Debug.Log($"<color=#00FF00>[上行 -> C++]</color> MsgCode: {msgCode}, JSON: {jsonBody}");
+
             var bodyBytes = Encoding.UTF8.GetBytes(jsonBody ?? string.Empty);
             var bodyLen = bodyBytes.Length;
             var pkgLen = HeaderLength + bodyLen;

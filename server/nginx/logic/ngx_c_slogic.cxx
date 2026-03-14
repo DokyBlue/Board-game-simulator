@@ -149,295 +149,6 @@ int ComputeBotRaise(const GameRoom::BotPlayer &bot,uint32_t maxBet)
 
     return std::max(toCall + base * strength, toCall);
 }
-
-
-int RankFromCardCode(const std::string &cardCode)
-{
-    if(cardCode.empty())
-    {
-        return 2;
-    }
-
-    char rankCode = cardCode[0];
-    if(rankCode >= '2' && rankCode <= '9') return rankCode - '0';
-    if(rankCode == 'T') return 10;
-    if(rankCode == 'J') return 11;
-    if(rankCode == 'Q') return 12;
-    if(rankCode == 'K') return 13;
-    if(rankCode == 'A') return 14;
-    return 2;
-}
-
-int SuitFromCardCode(const std::string &cardCode)
-{
-    if(cardCode.size() < 2)
-    {
-        return 0;
-    }
-
-    std::string suitPart;
-    if(cardCode.size() >= 2 && cardCode[1] == '0')
-    {
-        suitPart = cardCode.substr(2);
-    }
-    else
-    {
-        suitPart = cardCode.substr(1);
-    }
-
-    if(suitPart == "Clubs") return 1;
-    if(suitPart == "Diamonds") return 2;
-    if(suitPart == "Hearts") return 3;
-    if(suitPart == "Spades") return 4;
-    return 0;
-}
-
-struct EvaluatedFiveCardHand
-{
-    int category;
-    std::vector<int> tiebreak;
-
-    EvaluatedFiveCardHand() : category(0), tiebreak() {}
-};
-
-bool IsBetterHand(const EvaluatedFiveCardHand &lhs,const EvaluatedFiveCardHand &rhs)
-{
-    if(lhs.category != rhs.category)
-    {
-        return lhs.category > rhs.category;
-    }
-
-    std::size_t n = std::min(lhs.tiebreak.size(),rhs.tiebreak.size());
-    for(std::size_t i = 0; i < n; ++i)
-    {
-        if(lhs.tiebreak[i] != rhs.tiebreak[i])
-        {
-            return lhs.tiebreak[i] > rhs.tiebreak[i];
-        }
-    }
-
-    return lhs.tiebreak.size() > rhs.tiebreak.size();
-}
-
-bool IsEqualHand(const EvaluatedFiveCardHand &lhs,const EvaluatedFiveCardHand &rhs)
-{
-    return lhs.category == rhs.category && lhs.tiebreak == rhs.tiebreak;
-}
-
-EvaluatedFiveCardHand EvaluateFiveCards(const std::vector<std::string> &cards)
-{
-    EvaluatedFiveCardHand result;
-    if(cards.size() != 5)
-    {
-        return result;
-    }
-
-    int rankCount[15] = {0};
-    int suitCount[5] = {0};
-    std::vector<int> ranks;
-    ranks.reserve(5);
-
-    for(std::size_t i = 0; i < cards.size(); ++i)
-    {
-        int rank = RankFromCardCode(cards[i]);
-        int suit = SuitFromCardCode(cards[i]);
-        rankCount[rank] += 1;
-        if(suit >= 0 && suit < 5)
-        {
-            suitCount[suit] += 1;
-        }
-        ranks.push_back(rank);
-    }
-
-    bool isFlush = false;
-    for(int s = 1; s <= 4; ++s)
-    {
-        if(suitCount[s] == 5)
-        {
-            isFlush = true;
-            break;
-        }
-    }
-
-    std::set<int> uniqSet(ranks.begin(),ranks.end());
-    std::vector<int> uniq(uniqSet.begin(),uniqSet.end());
-    std::sort(uniq.begin(),uniq.end());
-
-    int straightHigh = 0;
-    if(uniq.size() == 5)
-    {
-        bool consecutive = true;
-        for(std::size_t i = 1; i < uniq.size(); ++i)
-        {
-            if(uniq[i] != uniq[i-1] + 1)
-            {
-                consecutive = false;
-                break;
-            }
-        }
-
-        if(consecutive)
-        {
-            straightHigh = uniq.back();
-        }
-        else if(uniq[0] == 2 && uniq[1] == 3 && uniq[2] == 4 && uniq[3] == 5 && uniq[4] == 14)
-        {
-            straightHigh = 5;
-        }
-    }
-
-    std::vector<std::pair<int,int> > groups;
-    for(int r = 14; r >= 2; --r)
-    {
-        if(rankCount[r] > 0)
-        {
-            groups.push_back(std::make_pair(rankCount[r],r));
-        }
-    }
-
-    std::sort(groups.begin(),groups.end(),[](const std::pair<int,int> &a,const std::pair<int,int> &b)
-    {
-        if(a.first != b.first)
-        {
-            return a.first > b.first;
-        }
-        return a.second > b.second;
-    });
-
-    if(isFlush && straightHigh > 0)
-    {
-        result.category = (straightHigh == 14 ? 10 : 9); // Royal Flush : Straight Flush
-        result.tiebreak.push_back(straightHigh);
-        return result;
-    }
-
-    if(groups[0].first == 4)
-    {
-        result.category = 8;
-        result.tiebreak.push_back(groups[0].second);
-        for(std::size_t i = 1; i < groups.size(); ++i)
-        {
-            if(groups[i].first == 1)
-            {
-                result.tiebreak.push_back(groups[i].second);
-                break;
-            }
-        }
-        return result;
-    }
-
-    if(groups[0].first == 3 && groups.size() > 1 && groups[1].first >= 2)
-    {
-        result.category = 7;
-        result.tiebreak.push_back(groups[0].second);
-        result.tiebreak.push_back(groups[1].second);
-        return result;
-    }
-
-    if(isFlush)
-    {
-        result.category = 6;
-        std::sort(ranks.begin(),ranks.end(),std::greater<int>());
-        result.tiebreak = ranks;
-        return result;
-    }
-
-    if(straightHigh > 0)
-    {
-        result.category = 5;
-        result.tiebreak.push_back(straightHigh);
-        return result;
-    }
-
-    if(groups[0].first == 3)
-    {
-        result.category = 4;
-        result.tiebreak.push_back(groups[0].second);
-        for(std::size_t i = 1; i < groups.size(); ++i)
-        {
-            if(groups[i].first == 1)
-            {
-                result.tiebreak.push_back(groups[i].second);
-            }
-        }
-        return result;
-    }
-
-    if(groups[0].first == 2 && groups.size() > 1 && groups[1].first == 2)
-    {
-        result.category = 3;
-        result.tiebreak.push_back(std::max(groups[0].second,groups[1].second));
-        result.tiebreak.push_back(std::min(groups[0].second,groups[1].second));
-        for(std::size_t i = 2; i < groups.size(); ++i)
-        {
-            if(groups[i].first == 1)
-            {
-                result.tiebreak.push_back(groups[i].second);
-                break;
-            }
-        }
-        return result;
-    }
-
-    if(groups[0].first == 2)
-    {
-        result.category = 2;
-        result.tiebreak.push_back(groups[0].second);
-        for(std::size_t i = 1; i < groups.size(); ++i)
-        {
-            if(groups[i].first == 1)
-            {
-                result.tiebreak.push_back(groups[i].second);
-            }
-        }
-        return result;
-    }
-
-    result.category = 1;
-    std::sort(ranks.begin(),ranks.end(),std::greater<int>());
-    result.tiebreak = ranks;
-    return result;
-}
-
-EvaluatedFiveCardHand EvaluateSevenCards(const std::vector<std::string> &cards)
-{
-    EvaluatedFiveCardHand best;
-    if(cards.size() < 5)
-    {
-        return best;
-    }
-
-    for(std::size_t a = 0; a < cards.size() - 4; ++a)
-    {
-        for(std::size_t b = a + 1; b < cards.size() - 3; ++b)
-        {
-            for(std::size_t c = b + 1; c < cards.size() - 2; ++c)
-            {
-                for(std::size_t d = c + 1; d < cards.size() - 1; ++d)
-                {
-                    for(std::size_t e = d + 1; e < cards.size(); ++e)
-                    {
-                        std::vector<std::string> five;
-                        five.reserve(5);
-                        five.push_back(cards[a]);
-                        five.push_back(cards[b]);
-                        five.push_back(cards[c]);
-                        five.push_back(cards[d]);
-                        five.push_back(cards[e]);
-
-                        EvaluatedFiveCardHand current = EvaluateFiveCards(five);
-                        if(best.category == 0 || IsBetterHand(current,best))
-                        {
-                            best = current;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return best;
-}
 } // namespace
 
 std::vector<std::string> GenerateShuffledDeck()
@@ -1617,11 +1328,37 @@ void CLogicSocket::CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room)
     else if(room->stage == "River")
     {
         room->stage = "Showdown";
-        room->maxBet = 0;
-        room->currentTurnUserId = 0;
-        ResolveShowdown(room);
-        room->isPlaying = false;
+    }
+    else
+    {
         return;
+    }
+
+    if(activeCount == 1)
+    {
+        room->stage = "Showdown";
+        room->currentTurnUserId = 0;
+        room->isPlaying = false;
+        ResolveShowdown(room);
+        return; 
+    }
+
+    if(activeCount > 1 && !allMatched)
+    {
+        return;
+    }
+
+    // 2. 正常的阶段推进
+    if(room->stage == "Preflop") { /* 发3张代码不变 */ room->stage = "Flop"; }
+    else if(room->stage == "Flop") { /* 发1张代码不变 */ room->stage = "Turn"; }
+    else if(room->stage == "Turn") { /* 发1张代码不变 */ room->stage = "River"; }
+    else if(room->stage == "River")
+    {
+        room->stage = "Showdown";
+        room->currentTurnUserId = 0;
+        room->isPlaying = false; // 标记游戏结束
+        ResolveShowdown(room); // 调用裁判函数分发底池
+        return; // 【核心修复】：直接 return，千万不要往下执行重置 Waiting 的代码了！
     }
     else
     {
@@ -1669,151 +1406,6 @@ void CLogicSocket::CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room)
         {
             room->currentTurnUserId = bot.userId;
         }
-    }
-}
-
-
-void CLogicSocket::ResolveShowdown(const std::shared_ptr<GameRoom> &room)
-{
-    if(room == NULL)
-    {
-        return;
-    }
-
-    struct Contender
-    {
-        bool isBot;
-        lpngx_connection_t conn;
-        std::size_t botIndex;
-        GameRoom::PlayerState *state;
-        std::vector<std::string> cards;
-        EvaluatedFiveCardHand hand;
-
-        Contender() : isBot(false), conn(NULL), botIndex(0), state(NULL), cards(), hand() {}
-    };
-
-    std::vector<Contender> contenders;
-
-    for(std::size_t i = 0; i < room->players.size(); ++i)
-    {
-        lpngx_connection_t conn = room->players[i];
-        if(conn == NULL)
-        {
-            continue;
-        }
-
-        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator stateIt = room->playerStates.find(conn);
-        if(stateIt == room->playerStates.end() || stateIt->second.isFolded)
-        {
-            continue;
-        }
-
-        std::unordered_map<lpngx_connection_t,std::vector<std::string> >::const_iterator holeIt = room->holeCards.find(conn);
-
-        Contender contender;
-        contender.isBot = false;
-        contender.conn = conn;
-        contender.state = &stateIt->second;
-        if(holeIt != room->holeCards.end())
-        {
-            contender.cards.insert(contender.cards.end(),holeIt->second.begin(),holeIt->second.end());
-        }
-        contender.cards.insert(contender.cards.end(),room->communityCards.begin(),room->communityCards.end());
-        contenders.push_back(contender);
-    }
-
-    for(std::size_t i = 0; i < room->bots.size(); ++i)
-    {
-        GameRoom::BotPlayer &bot = room->bots[i];
-        if(bot.state.isFolded)
-        {
-            continue;
-        }
-
-        Contender contender;
-        contender.isBot = true;
-        contender.botIndex = i;
-        contender.state = &bot.state;
-        contender.cards.insert(contender.cards.end(),bot.holeCards.begin(),bot.holeCards.end());
-        contender.cards.insert(contender.cards.end(),room->communityCards.begin(),room->communityCards.end());
-        contenders.push_back(contender);
-    }
-
-    if(contenders.empty())
-    {
-        room->pot = 0;
-        return;
-    }
-
-    if(contenders.size() == 1)
-    {
-        contenders[0].state->chips += static_cast<int>(room->pot);
-        room->pot = 0;
-
-        for(std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.begin(); it != room->playerStates.end(); ++it)
-        {
-            it->second.lastAction = (it->second.isFolded ? "Loser" : "Winner");
-        }
-        for(std::size_t i = 0; i < room->bots.size(); ++i)
-        {
-            room->bots[i].state.lastAction = (room->bots[i].state.isFolded ? "Loser" : "Winner");
-        }
-        return;
-    }
-
-    for(std::size_t i = 0; i < contenders.size(); ++i)
-    {
-        contenders[i].hand = EvaluateSevenCards(contenders[i].cards);
-    }
-
-    EvaluatedFiveCardHand best = contenders[0].hand;
-    for(std::size_t i = 1; i < contenders.size(); ++i)
-    {
-        if(IsBetterHand(contenders[i].hand,best))
-        {
-            best = contenders[i].hand;
-        }
-    }
-
-    std::vector<std::size_t> winners;
-    for(std::size_t i = 0; i < contenders.size(); ++i)
-    {
-        if(IsEqualHand(contenders[i].hand,best))
-        {
-            winners.push_back(i);
-        }
-    }
-
-    if(winners.empty())
-    {
-        room->pot = 0;
-        return;
-    }
-
-    int totalPot = static_cast<int>(room->pot);
-    int share = totalPot / static_cast<int>(winners.size());
-    int remainder = totalPot % static_cast<int>(winners.size());
-
-    for(std::size_t i = 0; i < winners.size(); ++i)
-    {
-        int gain = share + (i < static_cast<std::size_t>(remainder) ? 1 : 0);
-        contenders[winners[i]].state->chips += gain;
-    }
-
-    room->pot = 0;
-
-    for(std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.begin(); it != room->playerStates.end(); ++it)
-    {
-        it->second.lastAction = "Loser";
-    }
-    for(std::size_t i = 0; i < room->bots.size(); ++i)
-    {
-        room->bots[i].state.lastAction = "Loser";
-    }
-
-    for(std::size_t i = 0; i < winners.size(); ++i)
-    {
-        contenders[winners[i]].state->lastAction = "Winner";
     }
 }
 

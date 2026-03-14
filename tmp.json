@@ -1,0 +1,284 @@
+{
+    "communityCards": [],
+    "currentTurnUserId": 94592139477280,
+    "players": [
+        {
+            "chips": 2000,
+            "currentBet": 0,
+            "holeCards": [
+                {
+                    "rank": "Ace",
+                    "suit": "Hearts"
+                },
+                {
+                    "rank": "Queen",
+                    "suit": "Clubs"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": false,
+            "isFolded": false,
+            "isOwner": true,
+            "lastAction": "Waiting",
+            "userId": 94592139477280,
+            "username": "doky"
+        },
+        {
+            "chips": 2000,
+            "currentBet": 0,
+            "holeCards": [
+                {
+                    "rank": "Five",
+                    "suit": "Hearts"
+                },
+                {
+                    "rank": "Six",
+                    "suit": "Clubs"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Waiting",
+            "userId": 19001,
+            "username": "Bot-1"
+        },
+        {
+            "chips": 2000,
+            "currentBet": 0,
+            "holeCards": [
+                {
+                    "rank": "Four",
+                    "suit": "Clubs"
+                },
+                {
+                    "rank": "Ace",
+                    "suit": "Clubs"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Waiting",
+            "userId": 19002,
+            "username": "Bot-2"
+        },
+        {
+            "chips": 2000,
+            "currentBet": 0,
+            "holeCards": [
+                {
+                    "rank": "Seven",
+                    "suit": "Clubs"
+                },
+                {
+                    "rank": "King",
+                    "suit": "Hearts"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Waiting",
+            "userId": 19003,
+            "username": "Bot-3"
+        },
+        {
+            "chips": 2000,
+            "currentBet": 0,
+            "holeCards": [
+                {
+                    "rank": "Seven",
+                    "suit": "Diamonds"
+                },
+                {
+                    "rank": "Five",
+                    "suit": "Diamonds"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Waiting",
+            "userId": 19004,
+            "username": "Bot-4"
+        },
+        {
+            "chips": 2000,
+            "currentBet": 0,
+            "holeCards": [
+                {
+                    "rank": "Six",
+                    "suit": "Hearts"
+                },
+                {
+                    "rank": "Seven",
+                    "suit": "Hearts"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Waiting",
+            "userId": 19005,
+            "username": "Bot-5"
+        }
+    ],
+    "pot": 0,
+    "roomId": 19,
+    "stage": "Preflop"
+};
+
+{
+    "players": [
+        {
+            "chips": 2000,
+            "isOwner": true,
+            "userId": 94592139478880,
+            "username": "doky"
+        }
+    ],
+    "roomId": 25,
+    "status": "ok"
+}
+
+{
+    "communityCards": [],
+    "currentTurnUserId": 94592139478560,
+    "players": [
+        {
+            "chips": 1460,
+            "currentBet": 540,
+            "holeCards": [
+                {
+                    "rank": "Six",
+                    "suit": "Hearts"
+                },
+                {
+                    "rank": "King",
+                    "suit": "Spades"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": false,
+            "isFolded": false,
+            "isOwner": true,
+            "lastAction": "Call",
+            "userId": 94592139478560,
+            "username": "doky"
+        },
+        {
+            "chips": 1460,
+            "currentBet": 540,
+            "holeCards": [
+                {
+                    "rank": "Nine",
+                    "suit": "Clubs"
+                },
+                {
+                    "rank": "Four",
+                    "suit": "Hearts"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Call",
+            "userId": 28001,
+            "username": "Bot-1"
+        },
+        {
+            "chips": 1460,
+            "currentBet": 540,
+            "holeCards": [
+                {
+                    "rank": "Jack",
+                    "suit": "Hearts"
+                },
+                {
+                    "rank": "Five",
+                    "suit": "Hearts"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Call",
+            "userId": 28002,
+            "username": "Bot-2"
+        },
+        {
+            "chips": 1460,
+            "currentBet": 540,
+            "holeCards": [
+                {
+                    "rank": "Jack",
+                    "suit": "Spades"
+                },
+                {
+                    "rank": "Eight",
+                    "suit": "Clubs"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Call",
+            "userId": 28003,
+            "username": "Bot-3"
+        },
+        {
+            "chips": 1370,
+            "currentBet": 630,
+            "holeCards": [
+                {
+                    "rank": "Two",
+                    "suit": "Diamonds"
+                },
+                {
+                    "rank": "Ace",
+                    "suit": "Diamonds"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Raise",
+            "userId": 28004,
+            "username": "Bot-4"
+        },
+        {
+            "chips": 1370,
+            "currentBet": 630,
+            "holeCards": [
+                {
+                    "rank": "Three",
+                    "suit": "Hearts"
+                },
+                {
+                    "rank": "Five",
+                    "suit": "Diamonds"
+                }
+            ],
+            "isAllIn": false,
+            "isBot": true,
+            "isFolded": false,
+            "isOwner": false,
+            "lastAction": "Call",
+            "userId": 28005,
+            "username": "Bot-5"
+        }
+    ],
+    "pot": 3420,
+    "roomId": 28,
+    "stage": "Preflop"
+}

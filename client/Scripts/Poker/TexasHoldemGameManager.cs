@@ -107,7 +107,7 @@ namespace BoardGameSimulator.Poker
         private readonly List<PokerCard> _communityCards = new List<PokerCard>();
 
         private PokerDeck _deck;
-        private int _pot;
+        private int _pot = 0;
         private int _dealerIndex;
         private bool _waitingForRoundChoice;
         private int _roundNumber = 1;
@@ -143,23 +143,6 @@ namespace BoardGameSimulator.Poker
             public PlayerActionType Action;
             public int RaiseAmount;
         }
-
-        //private void Start()
-        //{
-        //    HookButtons();
-        //    RenderRoomInfo();
-        //    RefreshStrategyPanel();
-        //    QueryHistory();
-
-        //    if (SessionContext.CurrentRoomId > 0)
-        //    {
-        //        StartCoroutine(LoadRoomAndStart());
-        //        return;
-        //    }
-
-        //    CreateTable();
-        //    StartCoroutine(RoundLoop());
-        //}
 
         private async void Start()
         {
@@ -220,6 +203,15 @@ namespace BoardGameSimulator.Poker
 
         private void OnNetworkPacket(uint msgCode, string body)
         {
+            // 新增日志，拦截所有来自 C++ 的数据
+            Debug.Log($"<color=#00FFFF>[下行 <- C++]</color> MsgCode: {msgCode}, JSON: {body}");
+
+            if (msgCode == 1001)
+            {
+                ServerGameState user = JsonUtility.FromJson<ServerGameState>(body);
+                SessionContext.UserId = user.players[0].userId;
+            }
+
             if (msgCode != 3001)
             {
                 return;
@@ -235,6 +227,7 @@ namespace BoardGameSimulator.Poker
 
                 ServerGameState serverState = JsonUtility.FromJson<ServerGameState>(body);
                 _isWaitingForHostStart = false;
+
                 ToggleRoundChoiceButtons(false);
                 if (stateText != null)
                 {
@@ -251,6 +244,17 @@ namespace BoardGameSimulator.Poker
 
         private void RenderServerState(ServerGameState state)
         {
+            SessionContext.UserId = state.currentTurnUserId;
+            // 测试打印读取到的数据
+            //if (state != null)
+            //{
+            //    Debug.Log($"当前阶段: {state.stage}, 奖池: {state.pot}");
+            //    if (state.players != null && state.players.Length > 0)
+            //    {
+            //        Debug.Log($"玩家1名字: {state.players[0].username}");
+            //    }
+            //}
+
             if (state == null)
             {
                 return;
@@ -295,6 +299,18 @@ namespace BoardGameSimulator.Poker
                 }
             }
 
+            if (state.stage == "Showdown")
+            {
+                _isWaitingForHostStart = true;
+                SetActionButtons(false); // 禁用底部的 Call/Raise/Fold 按钮
+                ToggleRoundChoiceButtons(SessionContext.IsRoomOwner); // 呼出下一局/重置按钮
+
+                if (stateText != null)
+                {
+                    stateText.text = SessionContext.IsRoomOwner ? "本局结束，请点击 Next Round" : "本局结束，等待房主开始下一局...";
+                }
+            }
+
             // 安全兜底：等人阶段可能还没有 players 数组
             if (state.players == null)
             {
@@ -331,6 +347,7 @@ namespace BoardGameSimulator.Poker
                 }
 
                 bool isLocalPlayer = sp.userId == SessionContext.UserId;
+                //Debug.Log("SessionContext.UserId: " + SessionContext.UserId + ", PlayerUserId: " + sp.userId);
                 bool isMyTurn = state.currentTurnUserId == sp.userId;
 
                 if (isLocalPlayer)
@@ -398,59 +415,6 @@ namespace BoardGameSimulator.Poker
 
         private Suit ParseSuit(string s) => Enum.TryParse(s, out Suit res) ? res : Suit.Spades;
         private Rank ParseRank(string r) => Enum.TryParse(r, out Rank res) ? res : Rank.Two;
-
-        //private void HookButtons()
-        //{
-        //    callButton.onClick.AddListener(() => _playerAction = PlayerActionType.Call);
-        //    if (checkButton != null)
-        //    {
-        //        checkButton.onClick.AddListener(() => _playerAction = PlayerActionType.Check);
-        //    }
-        //    raiseButton.onClick.AddListener(() => _playerAction = PlayerActionType.Raise);
-        //    if (allInButton != null)
-        //    {
-        //        allInButton.onClick.AddListener(() => _playerAction = PlayerActionType.AllIn);
-        //    }
-        //    foldButton.onClick.AddListener(() => _playerAction = PlayerActionType.Fold);
-        //    if (nextRoundButton != null)
-        //    {
-        //        nextRoundButton.onClick.AddListener(StartNextRound);
-        //        nextRoundButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
-        //        nextRoundButton.interactable = false;
-        //    }
-
-        //    if (resetChipsButton != null)
-        //    {
-        //        resetChipsButton.onClick.AddListener(ResetChipsAndRestart);
-        //        resetChipsButton.gameObject.SetActive(SessionContext.IsRoomOwner || SessionContext.CurrentRoomId == 0);
-        //        resetChipsButton.interactable = false;
-        //    }
-
-        //    if (leaveRoomButton != null)
-        //    {
-        //        leaveRoomButton.onClick.AddListener(LeaveRoomAndBackLobby);
-        //    }
-
-        //    if (historyQueryButton != null)
-        //    {
-        //        historyQueryButton.onClick.AddListener(QueryHistory);
-        //    }
-
-        //    if (historyClearButton != null)
-        //    {
-        //        historyClearButton.onClick.AddListener(() =>
-        //        {
-        //            if (historyQueryInput != null)
-        //            {
-        //                historyQueryInput.text = string.Empty;
-        //            }
-
-        //            QueryHistory();
-        //        });
-        //    }
-
-        //    SetActionButtons(false);
-        //}
 
         public void StartNewRoundManual()
         {
@@ -954,11 +918,6 @@ namespace BoardGameSimulator.Poker
             };
         }
 
-        private void ShowRemainingChips()
-        {
-            
-        }
-
         private void ResolveShowdown()
         {
             var survivors = ActivePlayers();
@@ -1149,130 +1108,6 @@ namespace BoardGameSimulator.Poker
             }
         }
 
-
-        //private IEnumerator LoadRoomAndStart()
-        //{
-        //    if (lobbyApiClient == null)
-        //    {
-        //        CreateTable();
-        //        StartCoroutine(RoundLoop());
-        //        yield break;
-        //    }
-
-        //    LobbyStateApiResult stateResult = null;
-        //    yield return StartCoroutine(lobbyApiClient.GetRoomState(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-        //    {
-        //        stateResult = result;
-        //    }));
-
-        //    if (stateResult == null || !stateResult.Success || stateResult.Response == null || stateResult.Response.members == null || stateResult.Response.members.Length == 0)
-        //    {
-        //        CreateTable();
-        //        if (stateText != null && stateResult != null && !string.IsNullOrWhiteSpace(stateResult.Message))
-        //        {
-        //            stateText.text = $"获取房间状态失败：{stateResult.Message}";
-        //        }
-
-        //        StartCoroutine(RoundLoop());
-        //        yield break;
-        //    }
-
-        //    CreateTableFromRoomMembers(stateResult.Response.members);
-
-        //    if (stateResult.Response.gameStarted || SessionContext.AutoStartOnSceneEnter || SessionContext.CurrentRoomId == 0)
-        //    {
-        //        SessionContext.AutoStartOnSceneEnter = false;
-        //        StartCoroutine(RoundLoop());
-        //        yield break;
-        //    }
-
-        //    _waitingForRoundChoice = true;
-        //    _isWaitingForHostStart = true;
-        //    ToggleRoundChoiceButtons(SessionContext.IsRoomOwner);
-
-        //    if (stateText != null)
-        //    {
-        //        stateText.text = SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 开始联机对局" : "等待房主点击 Next Round 开始新游戏";
-        //    }
-
-        //    if (promptView != null)
-        //    {
-        //        promptView.Show(SessionContext.IsRoomOwner ? "你是房主，点击 Next Round 后将同步开始" : "等待房主点击 Next Round 开始新游戏", Color.white);
-        //    }
-
-        //    RenderStaticUI(BettingStreet.Preflop);
-        //    StartCoroutine(PollRoomStateUntilStart());
-        //}
-
-        //private IEnumerator PollRoomStateUntilStart()
-        //{
-        //    while (_isWaitingForHostStart && SessionContext.CurrentRoomId > 0 && lobbyApiClient != null)
-        //    {
-        //        LobbyStateApiResult stateResult = null;
-        //        yield return StartCoroutine(lobbyApiClient.GetRoomState(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-        //        {
-        //            stateResult = result;
-        //        }));
-
-        //        if (stateResult != null && stateResult.Success && stateResult.Response != null)
-        //        {
-        //            if (stateResult.Response.members != null && stateResult.Response.members.Length > 0)
-        //            {
-        //                CreateTableFromRoomMembers(stateResult.Response.members);
-        //                //RenderPlayers();
-        //            }
-
-        //            if (stateResult.Response.gameStarted)
-        //            {
-        //                _isWaitingForHostStart = false;
-        //                _waitingForRoundChoice = false;
-        //                ToggleRoundChoiceButtons(false);
-        //                StartCoroutine(RoundLoop());
-        //                yield break;
-        //            }
-        //        }
-
-        //        yield return new WaitForSeconds(1.5f);
-        //    }
-        //}
-
-        //private void CreateTableFromRoomMembers(LobbyApiClient.LobbyMember[] members)
-        //{
-        //    _players.Clear();
-        //    _botStyles.Clear();
-        //    _lastActions.Clear();
-
-        //    var memberList = members
-        //        .Where(member => member != null && !string.IsNullOrWhiteSpace(member.username))
-        //        .Take(MaxRoomPlayers)
-        //        .ToList();
-
-        //    if (memberList.Count == 0)
-        //    {
-        //        var fallbackName = string.IsNullOrWhiteSpace(SessionContext.CurrentUser) ? "Player" : SessionContext.CurrentUser;
-        //        _players.Add(new PokerPlayer(fallbackName, initialChips, false));
-        //    }
-        //    else
-        //    {
-        //        foreach (var member in memberList)
-        //        {
-        //            var isSelf = member.userId == SessionContext.UserId;
-        //            _players.Add(new PokerPlayer(member.username, initialChips, !isSelf));
-        //        }
-        //    }
-
-        //    for (var i = _players.Count; i < MaxRoomPlayers; i++)
-        //    {
-        //        var botName = $"Bot-{i + 1}";
-        //        _players.Add(new PokerPlayer(botName, initialChips, true));
-        //    }
-
-        //    for (var i = 0; i < _players.Count; i++)
-        //    {
-        //        _lastActions[_players[i].Name] = "Waiting";
-        //    }
-        //}
-
         private void CreateTable()
         {
             _players.Clear();
@@ -1348,17 +1183,6 @@ namespace BoardGameSimulator.Poker
             promptView.SetStrategySnapshot(string.Join("\n", lines));
         }
 
-        //private static string BotStyleDescription(BotStyle style)
-        //{
-        //    return style switch
-        //    {
-        //        BotStyle.Tight => "Tight：保守，仅强牌重注",
-        //        BotStyle.Balanced => "Balanced：中庸，按压力调整",
-        //        BotStyle.Aggressive => "Aggressive：激进，偏好加注",
-        //        _ => "Chaotic：随机，波动较大"
-        //    };
-        //}
-
         private void EnterRoundChoiceState()
         {
             _waitingForRoundChoice = true;
@@ -1387,60 +1211,6 @@ namespace BoardGameSimulator.Poker
                 resetChipsButton.interactable = enabled;
             }
         }
-
-        //public void StartNextRound()
-        //{
-        //    if (!_waitingForRoundChoice)
-        //    {
-        //        return;
-        //    }
-
-        //    if (SessionContext.CurrentRoomId > 0 && !SessionContext.IsRoomOwner)
-        //    {
-        //        return;
-        //    }
-
-        //    if (SessionContext.CurrentRoomId > 0)
-        //    {
-        //        StartCoroutine(StartOnlineGameAsOwner());
-        //        return;
-        //    }
-
-        //    _roundNumber += 1;
-        //    StopAllCoroutines();
-        //    StartCoroutine(RoundLoop());
-        //}
-
-        //private IEnumerator StartOnlineGameAsOwner()
-        //{
-        //    if (lobbyApiClient == null)
-        //    {
-        //        yield break;
-        //    }
-
-        //    LobbyStartApiResult startResult = null;
-        //    yield return StartCoroutine(lobbyApiClient.StartGame(SessionContext.CurrentRoomId, SessionContext.AccessToken, result =>
-        //    {
-        //        startResult = result;
-        //    }));
-
-        //    if (startResult == null || !startResult.Success)
-        //    {
-        //        if (promptView != null)
-        //        {
-        //            promptView.Show($"开始游戏失败：{startResult?.Message}", Color.red);
-        //        }
-
-        //        yield break;
-        //    }
-
-        //    _isWaitingForHostStart = false;
-        //    _waitingForRoundChoice = false;
-        //    SessionContext.AutoStartOnSceneEnter = true;
-        //    _roundNumber += 1;
-        //    StopAllCoroutines();
-        //    StartCoroutine(RoundLoop());
-        //}
 
         public void ResetChipsAndRestart()
         {
