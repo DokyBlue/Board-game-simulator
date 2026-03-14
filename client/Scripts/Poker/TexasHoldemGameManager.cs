@@ -219,46 +219,28 @@ namespace BoardGameSimulator.Poker
 
         private void OnNetworkPacket(uint msgCode, string body)
         {
+            if (msgCode != 3001)
+            {
+                return;
+            }
+
             try
             {
-                if (msgCode == 3001)
+                if (string.IsNullOrWhiteSpace(body))
                 {
-                    if (string.IsNullOrWhiteSpace(body))
-                    {
-                        Debug.LogWarning("[TCP] 收到空的 3001 包体，忽略。");
-                        return;
-                    }
-
-                    ServerGameState serverState = JsonUtility.FromJson<ServerGameState>(body);
-                    _isWaitingForHostStart = false;
-                    ToggleRoundChoiceButtons(false);
-                    if (stateText != null)
-                    {
-                        stateText.text = "游戏进行中...";
-                    }
-
-                    RenderServerState(serverState);
+                    Debug.LogWarning("[TCP] 收到空的 3001 包体，忽略。");
                     return;
                 }
 
-                if (msgCode == 3002)
+                ServerGameState serverState = JsonUtility.FromJson<ServerGameState>(body);
+                _isWaitingForHostStart = false;
+                ToggleRoundChoiceButtons(false);
+                if (stateText != null)
                 {
-                    if (string.IsNullOrWhiteSpace(body))
-                    {
-                        return;
-                    }
-
-                    OwnerChangedEvent ownerChanged = JsonUtility.FromJson<OwnerChangedEvent>(body);
-                    if (ownerChanged != null)
-                    {
-                        SessionContext.IsRoomOwner = ownerChanged.newOwnerUserId == SessionContext.UserId;
-                        ToggleRoundChoiceButtons(SessionContext.IsRoomOwner);
-                        if (promptView != null)
-                        {
-                            promptView.Show(SessionContext.IsRoomOwner ? "你已成为新房主" : "房主已变更", Color.cyan);
-                        }
-                    }
+                    stateText.text = "游戏进行中...";
                 }
+
+                RenderServerState(serverState);
             }
             catch (Exception e)
             {
