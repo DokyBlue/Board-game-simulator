@@ -3,7 +3,22 @@
 #define __NGX_C_SLOGIC_H__
 
 #include <sys/socket.h>
+#include <memory>
+#include <shared_mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include "ngx_c_socket.h"
+
+struct GameRoom
+{
+    mutable std::shared_mutex roomMutex;
+    std::vector<lpngx_connection_t> players;
+    uint32_t potSize;
+    std::vector<std::string> communityCards;
+
+    GameRoom() : potSize(0) {}
+};
 
 class CLogicSocket : public CSocekt   //继承自父类CScoekt
 {
@@ -21,11 +36,22 @@ public:
 	bool _HandleRegister(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandleLogIn(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandlePing(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
+	bool _HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
+	bool _HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 
 	virtual void procPingTimeOutChecking(LPSTRUC_MSG_HEADER tmpmsg,time_t cur_time);      //心跳包检测时间到，该去检测心跳包是否超时的事宜，本函数只是把内存释放，子类应该重新事先该函数以实现具体的判断动作
 
 public:
 	virtual void threadRecvProcFunc(char *pMsgBuf);
+
+private:
+	void SendJsonPkgToClient(LPSTRUC_MSG_HEADER pMsgHeader,unsigned short iMsgCode,const std::string &jsonPayload);
+
+private:
+	std::unordered_map<uint32_t,std::shared_ptr<GameRoom>> m_gameRooms;
+	std::unordered_map<lpngx_connection_t,uint32_t> m_connRoomMap;
+	std::shared_mutex m_roomMapMutex;
+	std::unordered_map<uint32_t,bool (CLogicSocket::*)(lpngx_connection_t,LPSTRUC_MSG_HEADER,char *,unsigned short)> m_statusHandler;
 };
 
 #endif
