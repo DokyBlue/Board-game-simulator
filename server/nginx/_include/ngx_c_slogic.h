@@ -12,6 +12,15 @@
 
 struct GameRoom
 {
+    struct PlayerStats
+    {
+        std::string username;
+        int chips;
+        uint64_t userId;
+
+        PlayerStats() : username(""), chips(2000), userId(0) {}
+    };
+
     struct PlayerState
     {
         int chips;
@@ -34,6 +43,7 @@ struct GameRoom
     std::vector<std::string> communityCards;
     std::unordered_map<lpngx_connection_t,std::vector<std::string>> holeCards;
     std::unordered_map<lpngx_connection_t,PlayerState> playerStates;
+    std::unordered_map<lpngx_connection_t,PlayerStats> playerStats;
 
     GameRoom() : owner(NULL), pot(0), maxBet(0), stage("Waiting"), isPlaying(false), currentTurnUserId(0) {}
 };

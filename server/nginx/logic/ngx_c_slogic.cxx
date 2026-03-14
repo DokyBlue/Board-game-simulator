@@ -340,10 +340,12 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
     }
 
     uint32_t roomId = 0;
+    std::string username;
     try
     {
         nlohmann::json body = nlohmann::json::parse(std::string(pPkgBody,iBodyLength));
         roomId = body.at("roomId").get<uint32_t>();
+        username = body.value<std::string>("username",std::string(""));
     }
     catch(...)
     {
@@ -367,24 +369,124 @@ bool CLogicSocket::_HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER p
         m_connRoomMap[pConn] = roomId;
     }
 
+    std::vector<lpngx_connection_t> playersSnapshot;
+    std::string joinBroadcastJson;
     {
         std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
-        if(std::find(room->players.begin(),room->players.end(),pConn) == room->players.end())
-        {
-            room->players.push_back(pConn);
 
+        std::vector<lpngx_connection_t>::iterator existingPlayer = std::find(room->players.begin(),room->players.end(),pConn);
+        if(existingPlayer == room->players.end())
+        {
+            if(room->players.size() >= 6)
+            {
+                SendJsonPkgToClient(pMsgHeader,1001,"{\"status\":\"full\",\"roomId\":" + std::to_string(roomId) + "}");
+                return true;
+            }
+
+            room->players.push_back(pConn);
             if(room->owner == NULL)
             {
                 room->owner = pConn;
             }
+            room->playerStates[pConn] = GameRoom::PlayerState();
         }
 
-        room->playerStates[pConn] = GameRoom::PlayerState();
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerStats>::iterator statsIt = room->playerStats.find(pConn);
+        if(statsIt == room->playerStats.end())
+        {
+            GameRoom::PlayerStats stats;
+            stats.userId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pConn));
+            stats.username = username.empty() ? ("Player-" + std::to_string(stats.userId)) : username;
+
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(pConn);
+            if(stateIt != room->playerStates.end())
+            {
+                stats.chips = stateIt->second.chips;
+            }
+
+            room->playerStats[pConn] = stats;
+        }
+        else
+        {
+            if(!username.empty())
+            {
+                statsIt->second.username = username;
+            }
+
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(pConn);
+            if(stateIt != room->playerStates.end())
+            {
+                statsIt->second.chips = stateIt->second.chips;
+            }
+        }
+
+        nlohmann::json res;
+        res["status"] = "ok";
+        res["roomId"] = roomId;
+        res["players"] = nlohmann::json::array();
+
+        for(std::size_t i = 0; i < room->players.size(); ++i)
+        {
+            lpngx_connection_t playerConn = room->players[i];
+            if(playerConn == NULL)
+            {
+                continue;
+            }
+
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerStats>::iterator playerStatsIt = room->playerStats.find(playerConn);
+            if(playerStatsIt == room->playerStats.end())
+            {
+                GameRoom::PlayerStats fallbackStats;
+                fallbackStats.userId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
+                fallbackStats.username = "Player-" + std::to_string(fallbackStats.userId);
+
+                std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(playerConn);
+                if(stateIt != room->playerStates.end())
+                {
+                    fallbackStats.chips = stateIt->second.chips;
+                }
+
+                room->playerStats[playerConn] = fallbackStats;
+                playerStatsIt = room->playerStats.find(playerConn);
+            }
+
+            int chips = playerStatsIt->second.chips;
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator stateIt = room->playerStates.find(playerConn);
+            if(stateIt != room->playerStates.end())
+            {
+                chips = stateIt->second.chips;
+                playerStatsIt->second.chips = chips;
+            }
+
+            nlohmann::json playerJson;
+            playerJson["username"] = playerStatsIt->second.username;
+            playerJson["chips"] = chips;
+            playerJson["userId"] = playerStatsIt->second.userId;
+            playerJson["isOwner"] = (room->owner == playerConn);
+            res["players"].push_back(playerJson);
+        }
+
+        joinBroadcastJson = res.dump();
+        playersSnapshot = room->players;
     }
 
-    SendJsonPkgToClient(pMsgHeader,1001,"{\"status\":\"ok\",\"roomId\":" + std::to_string(roomId) + "}");
+    for(std::size_t i = 0; i < playersSnapshot.size(); ++i)
+    {
+        lpngx_connection_t playerConn = playersSnapshot[i];
+        if(playerConn == NULL)
+        {
+            continue;
+        }
+
+        STRUC_MSG_HEADER msgHeader;
+        msgHeader.pConn = playerConn;
+        msgHeader.iCurrsequence = playerConn->iCurrsequence;
+        SendJsonPkgToClient(&msgHeader,1001,joinBroadcastJson);
+    }
+
     return true;
 }
+
 
 bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength)
 {
@@ -726,9 +828,19 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
                 stateForPlayer = stIt->second;
             }
 
+            uint64_t userId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
+            std::string username = "Player-" + std::to_string(reinterpret_cast<uintptr_t>(playerConn));
+            std::unordered_map<lpngx_connection_t,GameRoom::PlayerStats>::iterator statsIt = room->playerStats.find(playerConn);
+            if(statsIt != room->playerStats.end())
+            {
+                userId = statsIt->second.userId;
+                username = statsIt->second.username;
+                statsIt->second.chips = stateForPlayer.chips;
+            }
+
             nlohmann::json playerJson;
-            playerJson["userId"] = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
-            playerJson["username"] = "Player-" + std::to_string(reinterpret_cast<uintptr_t>(playerConn));
+            playerJson["userId"] = userId;
+            playerJson["username"] = username;
             playerJson["chips"] = stateForPlayer.chips;
             playerJson["currentBet"] = stateForPlayer.currentBet;
             playerJson["isFolded"] = stateForPlayer.isFolded;
