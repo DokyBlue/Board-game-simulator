@@ -25,6 +25,7 @@ struct GameRoom
 
     mutable std::shared_mutex roomMutex;
     std::vector<lpngx_connection_t> players;
+    lpngx_connection_t owner;
     uint32_t pot;
     uint32_t maxBet;
     std::string stage;
@@ -34,7 +35,7 @@ struct GameRoom
     std::unordered_map<lpngx_connection_t,std::vector<std::string>> holeCards;
     std::unordered_map<lpngx_connection_t,PlayerState> playerStates;
 
-    GameRoom() : pot(0), maxBet(0), stage("Waiting"), isPlaying(false), currentTurnUserId(0) {}
+    GameRoom() : owner(NULL), pot(0), maxBet(0), stage("Waiting"), isPlaying(false), currentTurnUserId(0) {}
 };
 
 class CLogicSocket : public CSocekt   //继承自父类CScoekt
@@ -55,6 +56,7 @@ public:
 	bool _HandlePing(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandleJoinRoom(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
+	bool _HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 	bool _HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER pMsgHeader,char *pPkgBody,unsigned short iBodyLength);
 
 	virtual void procPingTimeOutChecking(LPSTRUC_MSG_HEADER tmpmsg,time_t cur_time);      //心跳包检测时间到，该去检测心跳包是否超时的事宜，本函数只是把内存释放，子类应该重新事先该函数以实现具体的判断动作
