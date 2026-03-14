@@ -74,6 +74,9 @@ public:
 public:
 	virtual void threadRecvProcFunc(char *pMsgBuf);
 
+protected:
+	virtual void OnConnectionClosed(lpngx_connection_t pConn) override;
+
 private:
 	void SendJsonPkgToClient(LPSTRUC_MSG_HEADER pMsgHeader,unsigned short iMsgCode,const std::string &jsonPayload);
 	void BroadcastGameState(uint32_t roomId,const std::shared_ptr<GameRoom> &room);

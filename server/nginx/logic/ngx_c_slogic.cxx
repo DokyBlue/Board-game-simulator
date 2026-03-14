@@ -785,6 +785,123 @@ bool CLogicSocket::_HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
     return true;
 }
 
+
+void CLogicSocket::OnConnectionClosed(lpngx_connection_t pConn)
+{
+    if(pConn == NULL)
+    {
+        return;
+    }
+
+    uint32_t roomId = 0;
+    std::shared_ptr<GameRoom> room;
+    {
+        std::unique_lock<std::shared_mutex> roomMapLock(m_roomMapMutex);
+        std::unordered_map<lpngx_connection_t,uint32_t>::iterator connIt = m_connRoomMap.find(pConn);
+        if(connIt == m_connRoomMap.end())
+        {
+            return;
+        }
+
+        roomId = connIt->second;
+        m_connRoomMap.erase(connIt);
+
+        std::unordered_map<uint32_t,std::shared_ptr<GameRoom>>::iterator roomIt = m_gameRooms.find(roomId);
+        if(roomIt == m_gameRooms.end())
+        {
+            return;
+        }
+
+        room = roomIt->second;
+    }
+
+    std::vector<lpngx_connection_t> playersSnapshot;
+    bool wasOwner = false;
+    bool ownerChanged = false;
+    bool destroyRoom = false;
+    uint64_t newOwnerUserId = 0;
+
+    {
+        std::unique_lock<std::shared_mutex> roomLock(room->roomMutex);
+
+        std::vector<lpngx_connection_t>::iterator playerIt = std::find(room->players.begin(),room->players.end(),pConn);
+        if(playerIt != room->players.end())
+        {
+            room->players.erase(playerIt);
+        }
+
+        room->playerStates.erase(pConn);
+        room->playerStats.erase(pConn);
+        room->holeCards.erase(pConn);
+
+        wasOwner = (room->owner == pConn);
+        if(wasOwner)
+        {
+            if(!room->players.empty())
+            {
+                room->owner = room->players[0];
+                ownerChanged = true;
+
+                std::unordered_map<lpngx_connection_t,GameRoom::PlayerStats>::const_iterator statsIt = room->playerStats.find(room->owner);
+                if(statsIt != room->playerStats.end())
+                {
+                    newOwnerUserId = statsIt->second.userId;
+                }
+                else
+                {
+                    newOwnerUserId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(room->owner));
+                }
+            }
+            else
+            {
+                room->owner = NULL;
+                destroyRoom = true;
+            }
+        }
+
+        if(!destroyRoom)
+        {
+            playersSnapshot = room->players;
+        }
+    }
+
+    if(destroyRoom)
+    {
+        std::unique_lock<std::shared_mutex> roomMapLock(m_roomMapMutex);
+        std::unordered_map<uint32_t,std::shared_ptr<GameRoom>>::iterator roomIt = m_gameRooms.find(roomId);
+        if(roomIt != m_gameRooms.end() && roomIt->second == room)
+        {
+            m_gameRooms.erase(roomIt);
+        }
+        return;
+    }
+
+    if(ownerChanged)
+    {
+        nlohmann::json ownerChangedJson;
+        ownerChangedJson["roomId"] = roomId;
+        ownerChangedJson["newOwnerUserId"] = newOwnerUserId;
+        ownerChangedJson["event"] = "OwnerChanged";
+        std::string ownerPayload = ownerChangedJson.dump();
+
+        for(std::size_t i = 0; i < playersSnapshot.size(); ++i)
+        {
+            lpngx_connection_t playerConn = playersSnapshot[i];
+            if(playerConn == NULL)
+            {
+                continue;
+            }
+
+            STRUC_MSG_HEADER msgHeader;
+            msgHeader.pConn = playerConn;
+            msgHeader.iCurrsequence = playerConn->iCurrsequence;
+            SendJsonPkgToClient(&msgHeader,3002,ownerPayload);
+        }
+    }
+
+    BroadcastGameState(roomId,room);
+}
+
 void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<GameRoom> &room)
 {
     std::vector<lpngx_connection_t> playersSnapshot;
@@ -842,6 +959,7 @@ void CLogicSocket::BroadcastGameState(uint32_t roomId,const std::shared_ptr<Game
             playerJson["userId"] = userId;
             playerJson["username"] = username;
             playerJson["chips"] = stateForPlayer.chips;
+            playerJson["isOwner"] = (room->owner == playerConn);
             playerJson["currentBet"] = stateForPlayer.currentBet;
             playerJson["isFolded"] = stateForPlayer.isFolded;
             playerJson["isAllIn"] = stateForPlayer.isAllIn;
