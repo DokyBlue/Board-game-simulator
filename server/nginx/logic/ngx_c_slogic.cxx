@@ -1240,6 +1240,142 @@ void CLogicSocket::AdvanceTurn(const std::shared_ptr<GameRoom> &room,uint64_t cu
     }
 }
 
+void CLogicSocket::CheckAndAdvanceStage(const std::shared_ptr<GameRoom> &room)
+{
+    if(room == NULL)
+    {
+        return;
+    }
+
+    int activeCount = 0;
+    bool allMatched = true;
+
+    for(std::size_t i = 0; i < room->players.size(); ++i)
+    {
+        lpngx_connection_t conn = room->players[i];
+        if(conn == NULL)
+        {
+            continue;
+        }
+
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.find(conn);
+        if(it == room->playerStates.end())
+        {
+            continue;
+        }
+
+        if(!IsActivePlayer(it->second))
+        {
+            continue;
+        }
+
+        ++activeCount;
+        if(it->second.lastAction == "Waiting" || static_cast<uint32_t>(it->second.currentBet) != room->maxBet)
+        {
+            allMatched = false;
+        }
+    }
+
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        GameRoom::BotPlayer &bot = room->bots[i];
+        if(!IsActivePlayer(bot.state))
+        {
+            continue;
+        }
+
+        ++activeCount;
+        if(bot.state.lastAction == "Waiting" || static_cast<uint32_t>(bot.state.currentBet) != room->maxBet)
+        {
+            allMatched = false;
+        }
+    }
+
+    if(activeCount > 1 && !allMatched)
+    {
+        return;
+    }
+
+    if(room->stage == "Preflop")
+    {
+        for(int i = 0; i < 3 && !room->deck.empty(); ++i)
+        {
+            room->communityCards.push_back(room->deck.back());
+            room->deck.pop_back();
+        }
+        room->stage = "Flop";
+    }
+    else if(room->stage == "Flop")
+    {
+        if(!room->deck.empty())
+        {
+            room->communityCards.push_back(room->deck.back());
+            room->deck.pop_back();
+        }
+        room->stage = "Turn";
+    }
+    else if(room->stage == "Turn")
+    {
+        if(!room->deck.empty())
+        {
+            room->communityCards.push_back(room->deck.back());
+            room->deck.pop_back();
+        }
+        room->stage = "River";
+    }
+    else if(room->stage == "River")
+    {
+        room->stage = "Showdown";
+    }
+    else
+    {
+        return;
+    }
+
+    room->maxBet = 0;
+    room->currentTurnUserId = 0;
+
+    for(std::size_t i = 0; i < room->players.size(); ++i)
+    {
+        lpngx_connection_t conn = room->players[i];
+        if(conn == NULL)
+        {
+            continue;
+        }
+
+        std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::iterator it = room->playerStates.find(conn);
+        if(it == room->playerStates.end() || !IsActivePlayer(it->second))
+        {
+            continue;
+        }
+
+        it->second.currentBet = 0;
+        it->second.lastAction = "Waiting";
+
+        if(room->currentTurnUserId == 0)
+        {
+            room->currentTurnUserId = GetPlayerUserId(room,conn);
+        }
+    }
+
+    for(std::size_t i = 0; i < room->bots.size(); ++i)
+    {
+        GameRoom::BotPlayer &bot = room->bots[i];
+        if(!IsActivePlayer(bot.state))
+        {
+            continue;
+        }
+
+        bot.state.currentBet = 0;
+        bot.state.lastAction = "Waiting";
+
+        if(room->currentTurnUserId == 0)
+        {
+            room->currentTurnUserId = bot.userId;
+        }
+    }
+}
+
 void CLogicSocket::RunBotTurns(uint32_t roomId,const std::shared_ptr<GameRoom> &room)
 {
     if(room == NULL)
