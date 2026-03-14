@@ -125,7 +125,8 @@ public:
 protected:
 	//数据发送相关
 	void msgSend(char *psendbuf);                                         //把数据扔到待发送对列中 
-	void zdClosesocketProc(lpngx_connection_t p_Conn);                    //主动关闭一个连接时的要做些善后的处理函数	
+	void zdClosesocketProc(lpngx_connection_t p_Conn);                    //主动关闭一个连接时的要做些善后的处理函数
+	virtual void OnConnectionClosed(lpngx_connection_t p_Conn);           //连接关闭时的业务回调	
 	
 private:	
 	void ReadConf();                                                      //专门用于读各种配置项	
