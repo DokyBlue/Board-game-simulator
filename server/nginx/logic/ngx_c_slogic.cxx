@@ -18,6 +18,7 @@
 #include <sstream>
 #include <mutex>
 #include <cctype>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
