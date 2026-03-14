@@ -51,6 +51,14 @@ namespace BoardGameSimulator.Poker
         public string rank;
     }
 
+    [Serializable]
+    public class OwnerChangedEvent
+    {
+        public long roomId;
+        public long newOwnerUserId;
+        public string @event;
+    }
+
     public class TexasHoldemGameManager : MonoBehaviour
     {
         [Header("Config")]

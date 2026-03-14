@@ -87,6 +87,22 @@ bool IsActivePlayer(const GameRoom::PlayerState &state)
 {
     return !state.isFolded && !state.isAllIn;
 }
+
+uint64_t GetPlayerUserId(const std::shared_ptr<GameRoom> &room,lpngx_connection_t playerConn)
+{
+    if(room == NULL || playerConn == NULL)
+    {
+        return 0;
+    }
+
+    std::unordered_map<lpngx_connection_t,GameRoom::PlayerStats>::const_iterator statsIt = room->playerStats.find(playerConn);
+    if(statsIt != room->playerStats.end() && statsIt->second.userId != 0)
+    {
+        return statsIt->second.userId;
+    }
+
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(playerConn));
+}
 } // namespace
 
 std::vector<std::string> GenerateShuffledDeck()
@@ -628,7 +644,7 @@ bool CLogicSocket::_HandleGameAction(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
                 std::unordered_map<lpngx_connection_t,GameRoom::PlayerState>::const_iterator candidateStateIt = room->playerStates.find(candidateConn);
                 if(candidateStateIt != room->playerStates.end() && IsActivePlayer(candidateStateIt->second))
                 {
-                    room->currentTurnUserId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(candidateConn));
+                    room->currentTurnUserId = GetPlayerUserId(room,candidateConn);
                     break;
                 }
             }
@@ -713,7 +729,7 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
 
         if(!room->players.empty() && room->players[0] != NULL)
         {
-            room->currentTurnUserId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(room->players[0]));
+            room->currentTurnUserId = GetPlayerUserId(room,room->players[0]);
         }
         else
         {
