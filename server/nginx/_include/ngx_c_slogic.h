@@ -41,6 +41,7 @@ struct GameRoom
     bool isPlaying;
     uint64_t currentTurnUserId;
     std::vector<std::string> communityCards;
+    std::vector<std::string> deck;
     std::unordered_map<lpngx_connection_t,std::vector<std::string>> holeCards;
     std::unordered_map<lpngx_connection_t,PlayerState> playerStates;
     struct BotPlayer

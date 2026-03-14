@@ -708,7 +708,7 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
             return false;
         }
 
-        std::vector<std::string> deck = GenerateShuffledDeck();
+        room->deck = GenerateShuffledDeck();
 
         room->isPlaying = true;
         room->pot = 0;
@@ -728,16 +728,16 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
         for(std::size_t i = 0; i < room->players.size(); ++i)
         {
             lpngx_connection_t playerConn = room->players[i];
-            if(playerConn == NULL || deck.size() < 2)
+            if(playerConn == NULL || room->deck.size() < 2)
             {
                 continue;
             }
 
             std::vector<std::string> cards;
-            cards.push_back(deck.back());
-            deck.pop_back();
-            cards.push_back(deck.back());
-            deck.pop_back();
+            cards.push_back(room->deck.back());
+            room->deck.pop_back();
+            cards.push_back(room->deck.back());
+            room->deck.pop_back();
 
             room->holeCards[playerConn] = cards;
         }
@@ -831,6 +831,7 @@ bool CLogicSocket::_HandleResetChips(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER
         room->maxBet = 0;
         room->stage = "Preflop";
         room->communityCards.clear();
+        room->deck.clear();
         room->holeCards.clear();
         room->bots.clear();
         room->isPlaying = false;
