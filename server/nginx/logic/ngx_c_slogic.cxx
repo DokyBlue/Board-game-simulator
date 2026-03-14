@@ -745,7 +745,7 @@ bool CLogicSocket::_HandleStartGame(lpngx_connection_t pConn,LPSTRUC_MSG_HEADER 
         FillBotsForRoom(roomId,room);
         for(std::size_t i = 0; i < room->bots.size(); ++i)
         {
-            if(deck.size() < 2)
+            if(room->deck.size() < 2)
             {
                 break;
             }
